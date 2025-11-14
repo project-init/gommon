@@ -4,7 +4,7 @@ on:
   workflow_call:
 
 jobs:
-  unit-test:
+  lint-and-format:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
