@@ -1,0 +1,33 @@
+[tools]
+go = "1.25.4"
+golangci-lint = "2.4.0"
+gotestsum = "1.13.0"
+
+[env]
+MISE_DISABLE_BACKENDS = "aqua,ubi"
+
+[settings]
+experimental = true
+
+# Tests
+
+[tasks.test]
+depends = [
+    "unit-test"
+]
+
+[tasks.unit-test]
+run = "gotestsum --format testname -- ./..."
+
+# Linting
+
+[tasks.lint]
+run = "golangci-lint run --fix"
+
+[tasks.format]
+run = "go fmt ./..."
+
+# Release
+
+[tasks.start-release]
+run = "./scripts/git-tag-release.sh"
