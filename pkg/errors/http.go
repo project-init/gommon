@@ -1,6 +1,9 @@
 package errors
 
-import "net/http"
+import (
+	"errors"
+	"net/http"
+)
 
 func ToErrorFromHTTP(status int) error {
 	switch status {
@@ -28,5 +31,36 @@ func ToErrorFromHTTP(status int) error {
 		return ErrTimeout
 	default:
 		return ErrInternalServerError
+	}
+}
+
+func ToHTTPFromError(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+	if errors.Is(err, ErrBadRequest) {
+		return http.StatusBadRequest
+	} else if errors.Is(err, ErrPermissionDenied) {
+		return http.StatusUnauthorized
+	} else if errors.Is(err, ErrBadRequest) {
+		return http.StatusBadRequest
+	} else if errors.Is(err, ErrNotFound) {
+		return http.StatusNotFound
+	} else if errors.Is(err, ErrConflict) {
+		return http.StatusConflict
+	} else if errors.Is(err, ErrTooManyRequests) {
+		return http.StatusTooManyRequests
+	} else if errors.Is(err, ErrInternalServerError) {
+		return http.StatusInternalServerError
+	} else if errors.Is(err, ErrNotImplemented) {
+		return http.StatusNotImplemented
+	} else if errors.Is(err, ErrBadGateway) {
+		return http.StatusBadGateway
+	} else if errors.Is(err, ErrTimeout) {
+		return http.StatusGatewayTimeout
+	} else if errors.Is(err, ErrServiceUnavailable) {
+		return http.StatusServiceUnavailable
+	} else {
+		return http.StatusInternalServerError
 	}
 }
