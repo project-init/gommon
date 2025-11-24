@@ -32,3 +32,27 @@ func TestToErrorFromHTTP(t *testing.T) {
 		assert.Equal(t, test.expected, err)
 	}
 }
+
+func TestToHTTPFromError(t *testing.T) {
+	tests := []struct {
+		err      error
+		expected int
+	}{
+		{expected: http.StatusOK, err: nil},
+		{expected: http.StatusBadRequest, err: ErrBadRequest},
+		{expected: http.StatusUnauthorized, err: ErrPermissionDenied},
+		{expected: http.StatusNotFound, err: ErrNotFound},
+		{expected: http.StatusConflict, err: ErrConflict},
+		{expected: http.StatusTooManyRequests, err: ErrTooManyRequests},
+		{expected: http.StatusInternalServerError, err: ErrInternalServerError},
+		{expected: http.StatusNotImplemented, err: ErrNotImplemented},
+		{expected: http.StatusBadGateway, err: ErrBadGateway},
+		{expected: http.StatusServiceUnavailable, err: ErrServiceUnavailable},
+		{expected: http.StatusGatewayTimeout, err: ErrTimeout},
+	}
+
+	for _, test := range tests {
+		status := ToHTTPFromError(test.err)
+		assert.Equal(t, test.expected, status)
+	}
+}
