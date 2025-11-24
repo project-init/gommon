@@ -23,6 +23,7 @@ func TestToErrorFromHTTP(t *testing.T) {
 		{status: http.StatusBadGateway, expected: ErrBadGateway},
 		{status: http.StatusServiceUnavailable, expected: ErrServiceUnavailable},
 		{status: http.StatusGatewayTimeout, expected: ErrTimeout},
+		{status: http.StatusPreconditionFailed, expected: ErrPreconditionFailed},
 		// Status we haven't mapped
 		{status: http.StatusFailedDependency, expected: ErrInternalServerError},
 	}
@@ -49,6 +50,7 @@ func TestToHTTPFromError(t *testing.T) {
 		{expected: http.StatusBadGateway, err: ErrBadGateway},
 		{expected: http.StatusServiceUnavailable, err: ErrServiceUnavailable},
 		{expected: http.StatusGatewayTimeout, err: ErrTimeout},
+		{expected: http.StatusPreconditionFailed, err: ErrPreconditionFailed},
 	}
 
 	for _, test := range tests {

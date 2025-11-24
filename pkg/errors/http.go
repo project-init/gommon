@@ -29,6 +29,8 @@ func ToErrorFromHTTP(status int) error {
 		return ErrServiceUnavailable
 	case http.StatusGatewayTimeout: // 504
 		return ErrTimeout
+	case http.StatusPreconditionFailed:
+		return ErrPreconditionFailed
 	default:
 		return ErrInternalServerError
 	}
@@ -60,6 +62,8 @@ func ToHTTPFromError(err error) int {
 		return http.StatusGatewayTimeout
 	} else if errors.Is(err, ErrServiceUnavailable) {
 		return http.StatusServiceUnavailable
+	} else if errors.Is(err, ErrPreconditionFailed) {
+		return http.StatusPreconditionFailed
 	} else {
 		return http.StatusInternalServerError
 	}
