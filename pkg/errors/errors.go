@@ -13,6 +13,7 @@ var (
 	ErrTimeout             = errors.New("timeout")
 	ErrBadRequest          = errors.New("bad request")
 	ErrPermissionDenied    = errors.New("permission denied")
+	ErrForbidden           = errors.New("forbidden")
 	ErrNotFound            = errors.New("not found")
 	ErrConflict            = errors.New("conflict")
 	ErrTooManyRequests     = errors.New("too many requests")

@@ -12,7 +12,7 @@ func ToErrorFromHTTP(status int) error {
 	case http.StatusUnauthorized: // 401
 		return ErrPermissionDenied
 	case http.StatusForbidden: // 403
-		return ErrPermissionDenied
+		return ErrForbidden
 	case http.StatusNotFound: // 404
 		return ErrNotFound
 	case http.StatusConflict: // 409
@@ -44,6 +44,8 @@ func ToHTTPFromError(err error) int {
 		return http.StatusBadRequest
 	} else if errors.Is(err, ErrPermissionDenied) {
 		return http.StatusUnauthorized
+	} else if errors.Is(err, ErrForbidden) {
+		return http.StatusForbidden
 	} else if errors.Is(err, ErrBadRequest) {
 		return http.StatusBadRequest
 	} else if errors.Is(err, ErrNotFound) {
