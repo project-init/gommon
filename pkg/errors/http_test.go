@@ -14,7 +14,7 @@ func TestToErrorFromHTTP(t *testing.T) {
 	}{
 		{status: http.StatusBadRequest, expected: ErrBadRequest},
 		{status: http.StatusUnauthorized, expected: ErrPermissionDenied},
-		{status: http.StatusForbidden, expected: ErrPermissionDenied},
+		{status: http.StatusForbidden, expected: ErrForbidden},
 		{status: http.StatusNotFound, expected: ErrNotFound},
 		{status: http.StatusConflict, expected: ErrConflict},
 		{status: http.StatusTooManyRequests, expected: ErrTooManyRequests},
@@ -42,6 +42,7 @@ func TestToHTTPFromError(t *testing.T) {
 		{expected: http.StatusOK, err: nil},
 		{expected: http.StatusBadRequest, err: ErrBadRequest},
 		{expected: http.StatusUnauthorized, err: ErrPermissionDenied},
+		{expected: http.StatusForbidden, err: ErrForbidden},
 		{expected: http.StatusNotFound, err: ErrNotFound},
 		{expected: http.StatusConflict, err: ErrConflict},
 		{expected: http.StatusTooManyRequests, err: ErrTooManyRequests},
