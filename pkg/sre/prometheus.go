@@ -9,7 +9,7 @@ import (
 
 func ServePrometheusEndpoint(port int) error {
 	if port < 9002 || port > 65535 {
-		return fmt.Errorf("invalid port %d, must be between 9002 and 65535. Pass in nil to default to 9002", port)
+		return fmt.Errorf("invalid port %d, must be between 9002 and 65535", port)
 	}
 	return http.ListenAndServe(fmt.Sprintf(":%d", port), promhttp.Handler())
 }
