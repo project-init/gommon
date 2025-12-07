@@ -22,7 +22,7 @@ func RouteTree(router chi.Router, excludeRouteStartsWith []string) http.HandlerF
 	return func(w http.ResponseWriter, r *http.Request) {
 		routeInfo := make(map[string][]string)
 		walkFunc := func(method string, route string, handler http.Handler, middlewares ...func(http.Handler) http.Handler) error {
-			route = strings.Replace(route, "/*/", "/", -1)
+			route = strings.ReplaceAll(route, "/*/", "/")
 			for _, exclude := range excludeRouteStartsWith {
 				if strings.HasPrefix(route, exclude) {
 					return nil
