@@ -44,7 +44,7 @@ func NewConnection(ctx context.Context, connectionConfig *ConnectionConfig, iamC
 
 	if iamConfig != nil {
 		pgxCfg.BeforeConnect = func(ctx context.Context, config *pgx.ConnConfig) error {
-			authToken, err := buildAuthToken(ctx, *connectionConfig, *iamConfig)
+			authToken, err := BuildAuthToken(ctx, *connectionConfig, *iamConfig)
 			if err != nil {
 				return err
 			}
@@ -81,7 +81,7 @@ func connectionString(ctx context.Context, connectionConfig *ConnectionConfig, i
 	password := connectionConfig.Password
 	sslMode := "disable"
 	if iamConfig != nil {
-		authToken, err := buildAuthToken(ctx, *connectionConfig, *iamConfig)
+		authToken, err := BuildAuthToken(ctx, *connectionConfig, *iamConfig)
 		if err != nil {
 			return "", err
 		}
