@@ -108,6 +108,6 @@ func connectionString(ctx context.Context, connectionConfig *ConnectionConfig, i
 	return fmt.Sprintf("%s %s", hostInfo, connectionInfo), nil
 }
 
-func buildAuthToken(ctx context.Context, connectionConfig ConnectionConfig, iamConfig IAMConfig) (string, error) {
+func BuildAuthToken(ctx context.Context, connectionConfig ConnectionConfig, iamConfig IAMConfig) (string, error) {
 	return auth.BuildAuthToken(ctx, fmt.Sprintf("%s:%s", connectionConfig.Host, connectionConfig.Port), iamConfig.Region, connectionConfig.User, iamConfig.Credentials)
 }
