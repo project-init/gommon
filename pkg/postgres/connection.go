@@ -44,7 +44,7 @@ func NewConnection(ctx context.Context, connectionConfig *ConnectionConfig, iamC
 
 	if iamConfig != nil {
 		pgxCfg.BeforeConnect = func(ctx context.Context, config *pgx.ConnConfig) error {
-			authToken, err := buildAuthToken(ctx, *connectionConfig, *iamConfig)
+			authToken, err := BuildAuthToken(ctx, *connectionConfig, *iamConfig)
 			if err != nil {
 				return err
 			}
@@ -81,7 +81,7 @@ func connectionString(ctx context.Context, connectionConfig *ConnectionConfig, i
 	password := connectionConfig.Password
 	sslMode := "disable"
 	if iamConfig != nil {
-		authToken, err := buildAuthToken(ctx, *connectionConfig, *iamConfig)
+		authToken, err := BuildAuthToken(ctx, *connectionConfig, *iamConfig)
 		if err != nil {
 			return "", err
 		}
@@ -108,6 +108,6 @@ func connectionString(ctx context.Context, connectionConfig *ConnectionConfig, i
 	return fmt.Sprintf("%s %s", hostInfo, connectionInfo), nil
 }
 
-func buildAuthToken(ctx context.Context, connectionConfig ConnectionConfig, iamConfig IAMConfig) (string, error) {
+func BuildAuthToken(ctx context.Context, connectionConfig ConnectionConfig, iamConfig IAMConfig) (string, error) {
 	return auth.BuildAuthToken(ctx, fmt.Sprintf("%s:%s", connectionConfig.Host, connectionConfig.Port), iamConfig.Region, connectionConfig.User, iamConfig.Credentials)
 }
