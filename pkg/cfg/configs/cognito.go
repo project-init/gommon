@@ -1,11 +1,11 @@
-package auth
+package configs
 
-// CognitoConfig Struct meant to wrap configuration values to work alongside the https://github.com/project-init/terraform-aws-cognito
+// Cognito Struct meant to wrap configuration values to work alongside the https://github.com/project-init/terraform-aws-cognito
 // terraform module. Usage would look similar to
 //
 //	type Config struct {
 //		// Cognito
-//		CognitoConfig auth.CognitoConfig `env:"COGNITO" yaml:"cognito" safe:"true"`
+//		CognitoConfig cfg.CognitoConfig `env:"COGNITO" yaml:"cognito" safe:"true"`
 //	}
 //
 //	var (
@@ -34,7 +34,7 @@ package auth
 //
 //		return configuration
 //	}
-type CognitoConfig struct {
+type Cognito struct {
 	UseLocal   bool   `env:"COGNITO_USE_LOCAL" yaml:"cognitoUseLocal" envDefault:"false" safe:"true"`
 	Endpoint   string `env:"COGNITO_ENDPOINT" yaml:"cognitoEndpoint" safe:"true"`
 	ClientId   string `env:"COGNITO_CLIENT_ID" json:"cognitoClientId" yaml:"cognitoClientId"`
