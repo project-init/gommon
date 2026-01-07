@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/coreos/go-oidc"
+	"github.com/project-init/gommon/pkg/cfg/configs"
 	"golang.org/x/oauth2"
 )
 
@@ -38,6 +39,11 @@ func NewOauthHandler(clientId string, clientSecret string, redirectUrl string, i
 			Scopes:       scopes,
 		},
 	}, nil
+}
+
+// NewCognitoOauthHandler is a wrapper on NewOauthHandler that uses the CognitoConfig for most of the variables.
+func NewCognitoOauthHandler(cognitoConfig configs.Cognito, scopes []string) (*OauthHandler, error) {
+	return NewOauthHandler(cognitoConfig.ClientId, "", cognitoConfig.RedirectUrl, cognitoConfig.IssuerUrl, scopes)
 }
 
 func (h *OauthHandler) AuthCodeUrl(state string, opts ...oauth2.AuthCodeOption) string {
