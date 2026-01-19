@@ -26,7 +26,14 @@ type UrlMap map[env.Env][]string
 //	GetCorsHandler(env.Staging, UrlMap{env.Staging: []string{"https://staging.example.com"}}, 0, []string{})
 //
 // Allows origin "https://staging.example.com" with Allowed-Headers: "Content-Type", "Authorization"
-func GetCorsHandler(e env.Env, urlMap UrlMap, port int, allowedHeaders []string) (*cors.Cors, error) {
+func GetCorsHandler(e env.Env, urlMap UrlMap, allowedHeaders []string) (*cors.Cors, error) {
+	// Grab URL's for the selected environment
+	urls, ok := urlMap[e]
+	if !ok {
+		return nil, fmt.Errorf("unknown environment: %s", e)
+	}
+
+	// Build allowed headers list
 	baseHeaders := []string{"content-type", "authorization"}
 	allHeaders := make([]string, 0, len(baseHeaders)+len(allowedHeaders))
 	allHeaders = append(allHeaders, baseHeaders...)
@@ -43,25 +50,7 @@ func GetCorsHandler(e env.Env, urlMap UrlMap, port int, allowedHeaders []string)
 		AllowCredentials: true,
 		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete},
 		AllowedHeaders:   allHeaders,
-	}
-	urls, ok := urlMap[e]
-	if !ok {
-		return nil, fmt.Errorf("unknown environment: %s", e)
-	}
-
-	switch e {
-	case env.Development:
-		if port > 0 && port <= 65535 {
-			for _, url := range urls {
-				corsOptions.AllowedOrigins = append(corsOptions.AllowedOrigins, fmt.Sprintf("%s:%d", url, port))
-			}
-		} else {
-			return nil, fmt.Errorf("port number outside of range 0-65535: %d", port)
-		}
-	case env.Staging, env.Production:
-		corsOptions.AllowedOrigins = append(corsOptions.AllowedOrigins, urls...)
-	default:
-		return nil, fmt.Errorf("unknown environment: %s", e)
+		AllowedOrigins:   urls,
 	}
 
 	return cors.New(corsOptions), nil
