@@ -16,7 +16,8 @@ type UrlMap map[env.Env][]string
 // principle of least privilege by restricting allowed origins based on environment, limits headers to a minimum
 // of "Content-Type" and "Authorization" plus any additional headers provided, and allows only essential HTTP methods.
 // It will return an error if invoked with an invalid port number in the development environment, port being optional
-// in higher environments. It will also return an error if the environment is not mapped to a URL.
+// in higher environments. It will also return an error if the environment is not mapped to a URL. Multiple URL's can be
+// provided per environment via the UrlMap.
 //
 //	GetCorsHandler(env.Development, UrlMap{env.Development: []string{"http://localhost"}}, 8080, []string{"X-Custom-Header"})
 //
@@ -58,7 +59,9 @@ func GetCorsHandler(e env.Env, urlMap UrlMap, port int, allowedHeaders []string)
 			return nil, fmt.Errorf("port number outside of range 0-65535: %d", port)
 		}
 	case env.Staging, env.Production:
-		corsOptions.AllowedOrigins = append(corsOptions.AllowedOrigins, urls...)
+		for _, url := range urls {
+			corsOptions.AllowedOrigins = append(corsOptions.AllowedOrigins, url)
+		}
 	default:
 		return nil, fmt.Errorf("unknown environment: %s", e)
 	}
