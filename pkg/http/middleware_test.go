@@ -9,102 +9,113 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+var urlMap = UrlMap{
+	env.Development: []string{"http://localhost", "http://10.0.0.2"},
+	env.Staging:     []string{"https://app.staging.project-init.com"},
+	env.Production:  []string{"https://app.production.project-init.com"},
+}
+
 func TestGetCorsHandlerAllowedOrigins(t *testing.T) {
 	tests := []struct {
 		name           string
 		env            env.Env
-		port           string
+		port           int
 		expectError    bool
-		allowedOrigins string
+		allowedOrigins []string
 		allowedHeaders []string
+		urlMap         UrlMap
 	}{
 		{
 			name:           "valid port in development",
 			env:            env.Development,
-			port:           "8081",
+			port:           8081,
 			expectError:    false,
-			allowedOrigins: "http://localhost:8081",
-		},
-		{
-			name:        "invalid port string",
-			env:         env.Development,
-			port:        "invalid",
-			expectError: true,
+			allowedOrigins: []string{"http://localhost:8081", "http://10.0.0.2:8081"},
+			urlMap:         urlMap,
 		},
 		{
 			name:        "port out of range - negative",
 			env:         env.Development,
-			port:        "-1",
+			port:        -1,
 			expectError: true,
+			urlMap:      urlMap,
 		},
 		{
 			name:        "port out of range - too high",
 			env:         env.Development,
-			port:        "65536",
+			port:        65536,
 			expectError: true,
+			urlMap:      urlMap,
 		},
 		{
 			name:           "minimum valid port",
 			env:            env.Development,
-			port:           "1",
+			port:           1,
 			expectError:    false,
-			allowedOrigins: "http://localhost:1",
+			allowedOrigins: []string{"http://localhost:1", "http://10.0.0.2:1"},
+			urlMap:         urlMap,
 		},
 		{
 			name:           "maximum valid port",
 			env:            env.Development,
-			port:           "65535",
+			port:           65535,
 			expectError:    false,
-			allowedOrigins: "http://localhost:65535",
+			allowedOrigins: []string{"http://localhost:65535", "http://10.0.0.2:65535"},
+			urlMap:         urlMap,
 		},
 		{
 			name:           "staging environment",
 			env:            env.Staging,
-			port:           "",
+			port:           0,
 			expectError:    false,
-			allowedOrigins: "https://app.staging.project-init.com",
+			allowedOrigins: []string{"https://app.staging.project-init.com"},
+			urlMap:         urlMap,
 		},
 		{
 			name:           "staging environment with port -- should ignore port",
 			env:            env.Staging,
-			port:           "8081",
+			port:           8081,
 			expectError:    false,
-			allowedOrigins: "https://app.staging.project-init.com",
+			allowedOrigins: []string{"https://app.staging.project-init.com"},
+			urlMap:         urlMap,
 		},
 		{
 			name:           "production environment",
 			env:            env.Production,
-			port:           "",
+			port:           0,
 			expectError:    false,
-			allowedOrigins: "https://app.production.project-init.com",
+			allowedOrigins: []string{"https://app.production.project-init.com"},
+			urlMap:         urlMap,
 		},
 		{
 			name:        "production environment with port -- should ignore port",
 			env:         env.Production,
-			port:        "8081",
+			port:        8081,
 			expectError: false,
+			urlMap:      urlMap,
 		},
 		{
 			name:        "unknown environment",
 			env:         env.Env("unknown"),
-			port:        "8081",
+			port:        8081,
 			expectError: true,
+			urlMap:      urlMap,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			handler, err := GetCorsHandler(test.env, test.port, []string{})
+			handler, err := GetCorsHandler(test.env, test.urlMap, test.port, []string{})
 			if test.expectError {
 				assert.Error(t, err, "Expected error for test case: %s", test.name)
 				assert.Nil(t, handler, "Expected nil CORS handler for test case: %s", test.name)
 			} else {
 				assert.NoError(t, err, "Expected no error for test case: %s", test.name)
 				assert.NotNil(t, handler, "Expected non-nil CORS handler for test case: %s", test.name)
-				if test.allowedOrigins != "" {
+				if len(test.allowedOrigins) > 0 {
 					r := &http.Request{
 						Header: http.Header{
-							"Origin": []string{test.allowedOrigins},
+							"Origin": test.allowedOrigins,
 						},
 					}
 					assert.True(t, handler.OriginAllowed(r), "Origin should be allowed for test case: %s", test.name)
@@ -129,7 +140,7 @@ func TestGetCorsHandlerAllowedHeaders(t *testing.T) {
 		},
 		{
 			name:                "single custom header",
-			extraAllowedHeaders: []string{"X-Custom-Header"},
+			extraAllowedHeaders: []string{"x-custom-header"},
 			requestedHeaders:    "x-custom-header",
 			expectedHeaders:     []string{"x-custom-header"},
 		},
@@ -141,21 +152,27 @@ func TestGetCorsHandlerAllowedHeaders(t *testing.T) {
 		},
 		{
 			name:                "multiple custom headers with base headers",
-			extraAllowedHeaders: []string{"x-custom-header", "x-api-key"},
-			requestedHeaders:    "x-api-key, x-custom-header, authorization, content-type",
-			expectedHeaders:     []string{"x-api-key", "x-custom-header", "authorization", "content-type"},
+			extraAllowedHeaders: []string{"x-api-key", "x-custom-header"},
+			requestedHeaders:    "authorization, content-type, x-api-key, x-custom-header",
+			expectedHeaders:     []string{"authorization", "content-type", "x-api-key", "x-custom-header"},
+		},
+		{
+			name:                "headers supplied in any order with mixed case",
+			extraAllowedHeaders: []string{"X-Custom-Header", "X-Api-Key"},
+			requestedHeaders:    "authorization, content-type, x-api-key, x-custom-header",
+			expectedHeaders:     []string{"authorization", "content-type", "x-api-key", "x-custom-header"},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			handler, err := GetCorsHandler(env.Development, "3000", test.extraAllowedHeaders)
+			handler, err := GetCorsHandler(env.Development, urlMap, 3000, test.extraAllowedHeaders)
 			assert.NoError(t, err)
 
 			// Simulates a preflight request
 			req := httptest.NewRequest("OPTIONS", "http://localhost:3000", nil)
 			req.Header.Set("Origin", "http://localhost:3000")
-			req.Header.Set("Access-Control-Request-Method", "POST")
+			req.Header.Set("Access-Control-Request-Method", http.MethodPost)
 			req.Header.Set("Access-Control-Request-Headers", test.requestedHeaders)
 
 			w := httptest.NewRecorder()
