@@ -58,9 +58,7 @@ func GetCorsHandler(e env.Env, urlMap UrlMap, port int, allowedHeaders []string)
 			return nil, fmt.Errorf("port number outside of range 0-65535: %d", port)
 		}
 	case env.Staging, env.Production:
-		for _, url := range urls {
-			corsOptions.AllowedOrigins = append(corsOptions.AllowedOrigins, url)
-		}
+		corsOptions.AllowedOrigins = append(corsOptions.AllowedOrigins, urls...)
 	default:
 		return nil, fmt.Errorf("unknown environment: %s", e)
 	}
