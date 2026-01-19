@@ -15,15 +15,14 @@ type UrlMap map[env.Env][]string
 // GetCorsHandler returns a CORS handler configured based on the environment and port. It follows the
 // principle of least privilege by restricting allowed origins based on environment, limits headers to a minimum
 // of "Content-Type" and "Authorization" plus any additional headers provided, and allows only essential HTTP methods.
-// It will return an error if invoked with an invalid port number in the development environment, port being optional
-// in higher environments. It will also return an error if the environment is not mapped to a URL. Multiple URL's can be
-// provided per environment via the UrlMap.
+// It will return an error if the environment is not mapped to a URL. Multiple URL's can be provided per environment
+// via the UrlMap.
 //
-//	GetCorsHandler(env.Development, UrlMap{env.Development: []string{"http://localhost"}}, 8080, []string{"X-Custom-Header"})
+//	GetCorsHandler(env.Development, UrlMap{env.Development: []string{"http://localhost:8081"}}, []string{"X-Custom-Header"})
 //
-// Allows origin "http://localhost:8080" with Allowed-Headers: "Content-Type", "Authorization", "X-Custom-Header"
+// Allows origin "http://localhost:8081" with Allowed-Headers: "Content-Type", "Authorization", "X-Custom-Header"
 //
-//	GetCorsHandler(env.Staging, UrlMap{env.Staging: []string{"https://staging.example.com"}}, 0, []string{})
+//	GetCorsHandler(env.Staging, UrlMap{env.Staging: []string{"https://staging.example.com"}}, []string{})
 //
 // Allows origin "https://staging.example.com" with Allowed-Headers: "Content-Type", "Authorization"
 func GetCorsHandler(e env.Env, urlMap UrlMap, allowedHeaders []string) (*cors.Cors, error) {
