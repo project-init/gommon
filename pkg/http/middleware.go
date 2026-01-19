@@ -15,8 +15,9 @@ type UrlMap map[env.Env][]string
 // GetCorsHandler returns a CORS handler configured based on the environment and port. It follows the
 // principle of least privilege by restricting allowed origins based on environment, limits headers to a minimum
 // of "Content-Type" and "Authorization" plus any additional headers provided, and allows only essential HTTP methods.
-// It will return an error if the environment is not mapped to a URL. Multiple URL's can be provided per environment
-// via the UrlMap.
+// Supplied Headers need not be case-sensitive and are normalized and sorted to ensure compatibility with the rs/cors
+// library. It will return an error if the environment is not mapped to a URL. Multiple URL's can be provided per
+// environment via the UrlMap.
 //
 //	GetCorsHandler(env.Development, UrlMap{env.Development: []string{"http://localhost:8081"}}, []string{"X-Custom-Header"})
 //
