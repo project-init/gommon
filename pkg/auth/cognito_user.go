@@ -9,7 +9,6 @@ import (
 
 type CognitoUser struct {
 	Username      string
-	DbCreated     bool
 	Email         string
 	EmailVerified bool
 	GivenName     string
@@ -60,10 +59,5 @@ func setAttribute(cognitoUser *CognitoUser, attribute types.AttributeType) {
 		cognitoUser.GivenName = *attribute.Value
 	case "phone_number":
 		cognitoUser.PhoneNumber = *attribute.Value
-	case "custom:db_created":
-		dbCreated, err := strconv.ParseBool(*attribute.Value)
-		if err == nil {
-			cognitoUser.DbCreated = dbCreated
-		}
 	}
 }

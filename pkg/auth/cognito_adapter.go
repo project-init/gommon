@@ -10,12 +10,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
+	"github.com/coreos/go-oidc"
 	"github.com/golang-jwt/jwt/v5"
+	gaws "github.com/project-init/gommon/pkg/aws"
+	"github.com/project-init/gommon/pkg/cfg/configs"
 	gerror "github.com/project-init/gommon/pkg/errors"
 	"golang.org/x/oauth2"
 )
 
-type Adapter struct {
+type CognitoAdapter struct {
 	cognitoClient *cognitoidentityprovider.Client
 	appClientID   string
 	userPoolID    string
@@ -42,8 +45,40 @@ var (
 // https://dev.to/wiliamvj/authentication-with-golang-and-aws-cognito-577e
 
 // New creates a new Cognito adapter with the provided configuration.
-func New(config AdapterConfig) *Adapter {
-	return &Adapter{
+// This function handles all the complex setup internally, including creating the Cognito client
+// and OAuth handler based on whether you're using a local or production environment.
+func New(cognitoConfig configs.Cognito, region string) (*CognitoAdapter, error) {
+	var cognitoClient *cognitoidentityprovider.Client
+	var oauthHandler *OauthHandler
+	var err error
+
+	if cognitoConfig.UseLocal {
+		// Local development setup with custom endpoint
+		cognitoClient = cognitoidentityprovider.New(cognitoidentityprovider.Options{
+			BaseEndpoint: &cognitoConfig.Endpoint,
+			Region:       region,
+		})
+	} else {
+		// Production setup using AWS config
+		cognitoClient = cognitoidentityprovider.NewFromConfig(gaws.GetConfig())
+		oauthHandler, err = NewCognitoOauthHandler(cognitoConfig, []string{oidc.ScopeOpenID, "profile", "email"})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &CognitoAdapter{
+		cognitoClient: cognitoClient,
+		appClientID:   cognitoConfig.ClientId,
+		userPoolID:    cognitoConfig.UserPoolId,
+		oauthHandler:  oauthHandler,
+	}, nil
+}
+
+// NewWithConfig creates a new Cognito adapter with fine-grained control over all components.
+// Use this if you need to customize the Cognito client or OAuth handler beyond what New() provides.
+func NewWithConfig(config AdapterConfig) *CognitoAdapter {
+	return &CognitoAdapter{
 		cognitoClient: config.CognitoClient,
 		appClientID:   config.AppClientID,
 		userPoolID:    config.UserPoolID,
@@ -51,7 +86,7 @@ func New(config AdapterConfig) *Adapter {
 	}
 }
 
-func (a *Adapter) SignUp(ctx context.Context, firstName string, lastName string, email string, password string) (bool, error) {
+func (a *CognitoAdapter) SignUp(ctx context.Context, firstName string, lastName string, email string, password string) (bool, error) {
 	output, err := a.cognitoClient.SignUp(ctx, &cognitoidentityprovider.SignUpInput{
 		ClientId: aws.String(a.appClientID),
 		Password: aws.String(password),
@@ -88,7 +123,7 @@ func (a *Adapter) SignUp(ctx context.Context, firstName string, lastName string,
 	return output.UserConfirmed, err
 }
 
-func (a *Adapter) ResendConfirmationCode(ctx context.Context, username string) error {
+func (a *CognitoAdapter) ResendConfirmationCode(ctx context.Context, username string) error {
 	_, err := a.cognitoClient.ResendConfirmationCode(ctx, &cognitoidentityprovider.ResendConfirmationCodeInput{
 		ClientId: aws.String(a.appClientID),
 		Username: aws.String(username),
@@ -100,7 +135,7 @@ func (a *Adapter) ResendConfirmationCode(ctx context.Context, username string) e
 	return nil
 }
 
-func (a *Adapter) ConfirmAccount(ctx context.Context, email string, code string) (bool, error) {
+func (a *CognitoAdapter) ConfirmAccount(ctx context.Context, email string, code string) (bool, error) {
 	confirmationInput := &cognitoidentityprovider.ConfirmSignUpInput{
 		Username:         aws.String(email),
 		ConfirmationCode: aws.String(code),
@@ -122,7 +157,7 @@ func (a *Adapter) ConfirmAccount(ctx context.Context, email string, code string)
 	return true, nil
 }
 
-func (a *Adapter) SignIn(ctx context.Context, email string, password string) (*types.AuthenticationResultType, error) {
+func (a *CognitoAdapter) SignIn(ctx context.Context, email string, password string) (*types.AuthenticationResultType, error) {
 	var authResult *types.AuthenticationResultType
 	output, err := a.cognitoClient.InitiateAuth(ctx, &cognitoidentityprovider.InitiateAuthInput{
 		AuthFlow:       types.AuthFlowTypeUserPasswordAuth,
@@ -154,7 +189,7 @@ func (a *Adapter) SignIn(ctx context.Context, email string, password string) (*t
 	return authResult, err
 }
 
-func (a *Adapter) GetUserByToken(ctx context.Context, token string) (*CognitoUser, error) {
+func (a *CognitoAdapter) GetUserByToken(ctx context.Context, token string) (*CognitoUser, error) {
 	input := &cognitoidentityprovider.GetUserInput{
 		AccessToken: aws.String(token),
 	}
@@ -165,7 +200,7 @@ func (a *Adapter) GetUserByToken(ctx context.Context, token string) (*CognitoUse
 	return userFromGetUserOutput(result), nil
 }
 
-func (a *Adapter) GetUsersByEmail(ctx context.Context, email string) ([]*CognitoUser, error) {
+func (a *CognitoAdapter) GetUsersByEmail(ctx context.Context, email string) ([]*CognitoUser, error) {
 	input := &cognitoidentityprovider.ListUsersInput{
 		UserPoolId: aws.String(a.userPoolID),
 		Filter:     aws.String(fmt.Sprintf("email = \"%s\"", email)),
@@ -177,7 +212,7 @@ func (a *Adapter) GetUsersByEmail(ctx context.Context, email string) ([]*Cognito
 	return usersFromListUserOutput(result), nil
 }
 
-func (a *Adapter) UpdatePassword(ctx context.Context, email string, password string) error {
+func (a *CognitoAdapter) UpdatePassword(ctx context.Context, email string, password string) error {
 	input := &cognitoidentityprovider.AdminSetUserPasswordInput{
 		UserPoolId: aws.String(a.userPoolID),
 		Username:   aws.String(email),
@@ -191,7 +226,7 @@ func (a *Adapter) UpdatePassword(ctx context.Context, email string, password str
 	return nil
 }
 
-func (a *Adapter) DeleteUser(ctx context.Context, accessToken string) error {
+func (a *CognitoAdapter) DeleteUser(ctx context.Context, accessToken string) error {
 	_, err := a.cognitoClient.DeleteUser(ctx, &cognitoidentityprovider.DeleteUserInput{
 		AccessToken: aws.String(accessToken),
 	})
@@ -201,7 +236,7 @@ func (a *Adapter) DeleteUser(ctx context.Context, accessToken string) error {
 	return nil
 }
 
-func (a *Adapter) ForgotPassword(ctx context.Context, userName string) (*string, error) {
+func (a *CognitoAdapter) ForgotPassword(ctx context.Context, userName string) (*string, error) {
 	output, err := a.cognitoClient.ForgotPassword(ctx, &cognitoidentityprovider.ForgotPasswordInput{
 		ClientId: aws.String(a.appClientID),
 		Username: aws.String(userName),
@@ -212,7 +247,7 @@ func (a *Adapter) ForgotPassword(ctx context.Context, userName string) (*string,
 	return output.CodeDeliveryDetails.Destination, nil
 }
 
-func (a *Adapter) ResetPassword(ctx context.Context, code string, userName string, password string) error {
+func (a *CognitoAdapter) ResetPassword(ctx context.Context, code string, userName string, password string) error {
 	_, err := a.cognitoClient.ConfirmForgotPassword(ctx, &cognitoidentityprovider.ConfirmForgotPasswordInput{
 		ClientId:         aws.String(a.appClientID),
 		ConfirmationCode: aws.String(code),
@@ -236,7 +271,7 @@ func (a *Adapter) ResetPassword(ctx context.Context, code string, userName strin
 	return nil
 }
 
-func (a *Adapter) UpdateAttributes(ctx context.Context, username string, attributes []types.AttributeType) error {
+func (a *CognitoAdapter) UpdateAttributes(ctx context.Context, username string, attributes []types.AttributeType) error {
 	input := cognitoidentityprovider.AdminUpdateUserAttributesInput{
 		UserPoolId:     aws.String(a.userPoolID),
 		Username:       aws.String(username),
@@ -249,7 +284,7 @@ func (a *Adapter) UpdateAttributes(ctx context.Context, username string, attribu
 	return nil
 }
 
-func (a *Adapter) OauthCodeUrl() string {
+func (a *CognitoAdapter) OauthCodeUrl() string {
 	return a.oauthHandler.AuthCodeUrl(generateState(), oauth2.AccessTypeOffline)
 }
 
@@ -261,7 +296,7 @@ func generateState() string {
 	return string(b)
 }
 
-func (a *Adapter) ClaimsFromCode(ctx context.Context, code string) (jwt.MapClaims, error) {
+func (a *CognitoAdapter) ClaimsFromCode(ctx context.Context, code string) (jwt.MapClaims, error) {
 	token, err := a.oauthHandler.ExchangeCode(ctx, code)
 	if err != nil {
 		return nil, err
