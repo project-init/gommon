@@ -1,10 +1,7 @@
 package loglevel
 
 import (
-	"fmt"
 	"log/slog"
-	"os"
-	"strings"
 )
 
 type Level string
