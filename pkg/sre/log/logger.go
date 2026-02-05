@@ -10,7 +10,7 @@ import (
 
 type Config struct {
 	Level        Level `env:"LOG_LEVEL" yaml:"level" safe:"true"`
-	AddSource    bool  `env:"LOG_LEVEL" yaml:"addSource" safe:"true"`
+	AddSource    bool  `env:"LOG_ADD_SOURCE" yaml:"addSource" safe:"true"`
 	DefaultAttrs map[string]any
 }
 
