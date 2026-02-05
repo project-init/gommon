@@ -4,6 +4,7 @@ golangci-lint = "2.7.2"
 gotestsum = "1.13.0"
 
 [env]
+MISE_DISABLE_BACKENDS = "aqua,ubi"
 
 [settings]
 experimental = true
