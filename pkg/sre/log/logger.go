@@ -9,10 +9,11 @@ import (
 )
 
 type Config struct {
-	Level        Level
-	AddSource    bool
+	Level        Level `env:"LOG_LEVEL" yaml:"level" safe:"true"`
+	AddSource    bool  `env:"LOG_LEVEL" yaml:"addSource" safe:"true"`
 	DefaultAttrs map[string]any
 }
+
 type Level string
 
 const (
