@@ -25,18 +25,6 @@ type CognitoAdapter struct {
 	oauthHandler  *OauthHandler
 }
 
-// AdapterConfig holds the configuration needed to create a Cognito adapter.
-type AdapterConfig struct {
-	// CognitoClient is the AWS Cognito client initialized with your AWS config
-	CognitoClient *cognitoidentityprovider.Client
-	// AppClientID is the Cognito App Client ID
-	AppClientID string
-	// UserPoolID is the Cognito User Pool ID
-	UserPoolID string
-	// OauthHandler is optional and only needed if you plan to use OAuth flows
-	OauthHandler *OauthHandler
-}
-
 var (
 	stateCharacters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 )
@@ -75,17 +63,6 @@ func New(cognitoConfig configs.Cognito, region string) (*CognitoAdapter, error) 
 	}, nil
 }
 
-// NewWithConfig creates a new Cognito adapter with fine-grained control over all components.
-// Use this if you need to customize the Cognito client or OAuth handler beyond what New() provides.
-func NewWithConfig(config AdapterConfig) *CognitoAdapter {
-	return &CognitoAdapter{
-		cognitoClient: config.CognitoClient,
-		appClientID:   config.AppClientID,
-		userPoolID:    config.UserPoolID,
-		oauthHandler:  config.OauthHandler,
-	}
-}
-
 func (a *CognitoAdapter) SignUp(ctx context.Context, firstName string, lastName string, email string, password string) (bool, error) {
 	output, err := a.cognitoClient.SignUp(ctx, &cognitoidentityprovider.SignUpInput{
 		ClientId: aws.String(a.appClientID),
@@ -104,8 +81,6 @@ func (a *CognitoAdapter) SignUp(ctx context.Context, firstName string, lastName 
 				Name:  aws.String("family_name"),
 				Value: aws.String(lastName),
 			},
-			// NOTE: Add custom attributes here if needed (e.g., custom:db_created for database sync tracking)
-			// Example: {Name: aws.String("custom:db_created"), Value: aws.String("false")}
 		},
 	})
 	if err != nil {
