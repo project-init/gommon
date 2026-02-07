@@ -109,7 +109,7 @@ func (w *Worker) Start(ctx context.Context) error {
 		w.runBatchDeleter(ctx, w.deleteChan)
 	})
 
-	// 2) Start workers
+	// Start workers
 	for range w.workerCount {
 		allWG.Add(1)
 		workersWG.Add(1)
@@ -120,7 +120,7 @@ func (w *Worker) Start(ctx context.Context) error {
 		}()
 	}
 
-	// 3) Run poller (blocks)
+	// Run poller (blocks)
 	pollErr := w.poll(ctx, w.jobs)
 
 	// Shutdown sequence:
