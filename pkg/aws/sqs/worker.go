@@ -16,7 +16,10 @@ import (
 )
 
 // HandlerFunc is invoked for each received batch.
-type HandlerFunc func(ctx context.Context, batch []Message) error
+//
+// The handler should handle errors internally. Messages are only deleted if
+// your handler calls `Message.Mark()` on them.
+type HandlerFunc func(ctx context.Context, batch []Message)
 
 type deleteEntry struct {
 	id            string
@@ -157,11 +160,7 @@ func (w *Worker) runWorker(ctx context.Context, id int, jobs <-chan []types.Mess
 			})
 		}
 
-		if err := w.handler(ctx, batch); err != nil {
-			log.Printf("[sqs worker %d] handler error (batch size=%d): %v", id, len(batch), err)
-			// On handler error we do not delete; messages will become visible again after visibility timeout.
-			continue
-		}
+		w.handler(ctx, batch)
 	}
 }
 
