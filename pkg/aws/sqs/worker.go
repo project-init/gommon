@@ -110,14 +110,14 @@ func (w *Worker) Start(ctx context.Context) error {
 	})
 
 	// 2) Start workers
-	for i := 0; i < w.workerCount; i++ {
+	for range w.workerCount {
 		allWG.Add(1)
 		workersWG.Add(1)
-		go func(id int) {
+		go func() {
 			defer allWG.Done()
 			defer workersWG.Done()
-			w.runWorker(ctx, id, w.jobs)
-		}(i)
+			w.runWorker(ctx, w.jobs)
+		}()
 	}
 
 	// 3) Run poller (blocks)
@@ -135,7 +135,7 @@ func (w *Worker) Start(ctx context.Context) error {
 	return pollErr
 }
 
-func (w *Worker) runWorker(ctx context.Context, id int, jobs <-chan []types.Message) {
+func (w *Worker) runWorker(ctx context.Context, jobs <-chan []types.Message) {
 	for rawBatch := range jobs {
 		if len(rawBatch) == 0 {
 			continue
