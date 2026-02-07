@@ -2,150 +2,269 @@ package sqs
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
+	gaws "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
+
+	pkgaws "github.com/project-init/gommon/pkg/aws"
 )
 
+// HandlerFunc is invoked for each received batch.
+type HandlerFunc func(ctx context.Context, batch []Message) error
+
+type deleteEntry struct {
+	id            string
+	receiptHandle string
+}
+
 type Worker struct {
-	client      *sqs.Client
-	queueURL    string
-	handler     HandlerFunc
+	client *sqs.Client
+
+	queueURL string
+
+	handler HandlerFunc
+
 	workerCount int
-	// Configuration for batching
 	batchSize   int
-	batchWindow time.Duration
+
+	// ReceiveMessage tuning
+	waitTimeSeconds          int32
+	visibilityTimeoutSeconds *int32
+	maxReceiveBatchSize      int32 // sent to ReceiveMessage (<= 10)
+
+	// Delete batching
+	deleteBatchSize   int
+	deleteBatchWindow time.Duration
+	deleteChan        chan deleteEntry
+
+	// Internal worker scheduling
+	jobs chan []types.Message
 }
 
-func New(client *sqs.Client, queueURL string, handler HandlerFunc, workerCount int) *Worker {
-	return &Worker{
-		client:      client,
-		queueURL:    queueURL,
-		handler:     handler,
-		workerCount: workerCount,
-		batchSize:   10,              // SQS limit is 10
-		batchWindow: 1 * time.Second, // Flush at least every second
+// New constructs a Worker using DefaultOptions(), applies any variadic options, then validates.
+// Handler is required. QueueURL must be provided via WithQueueURL(...).
+func New(handler HandlerFunc, optFns ...Option) (*Worker, error) {
+	if handler == nil {
+		return nil, errors.New("sqs worker: handler is required")
 	}
+
+	opts := DefaultOptions()
+	for _, fn := range optFns {
+		if fn == nil {
+			continue
+		}
+		if err := fn(&opts); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := opts.Validate(); err != nil {
+		return nil, err
+	}
+
+	w := &Worker{
+		handler: handler,
+
+		client:   opts.Client,
+		queueURL: opts.QueueURL,
+
+		workerCount: opts.WorkerCount,
+		batchSize:   opts.BatchSize,
+
+		waitTimeSeconds:          opts.WaitTimeSeconds,
+		visibilityTimeoutSeconds: opts.VisibilityTimeoutSeconds,
+		maxReceiveBatchSize:      int32(opts.BatchSize),
+
+		deleteBatchSize:   opts.DeleteBatchSize,
+		deleteBatchWindow: opts.DeleteBatchWindow,
+	}
+
+	if w.client == nil {
+		w.client = sqs.NewFromConfig(pkgaws.GetConfig())
+	}
+
+	return w, nil
 }
 
+// Start runs the poller, workers, and background deleter until ctx is cancelled.
+// It returns when shutdown is complete. Any poll error is returned.
 func (w *Worker) Start(ctx context.Context) error {
-	var wg sync.WaitGroup
-	var workerWg sync.WaitGroup // Separate WG to know when workers are done
+	w.jobs = make(chan []types.Message, w.workerCount*2)
+	w.deleteChan = make(chan deleteEntry, 1000)
 
-	msgChan := make(chan types.Message, w.workerCount)
+	var allWG sync.WaitGroup
+	var workersWG sync.WaitGroup
 
-	// Channel for sending delete requests to the batcher
-	// The struct contains the ReceiptHandle and the MessageID (required for batch reqs)
-	deleteChan := make(chan types.DeleteMessageBatchRequestEntry, 100)
+	// Start background batch deleter
+	allWG.Go(func() {
+		w.runBatchDeleter(ctx, w.deleteChan)
+	})
 
-	// 1. Start Batch Deleter
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		w.runBatchDeleter(ctx, deleteChan)
-	}()
-
-	// 2. Start Workers
+	// 2) Start workers
 	for i := 0; i < w.workerCount; i++ {
-		wg.Add(1)
-		workerWg.Add(1)
+		allWG.Add(1)
+		workersWG.Add(1)
 		go func(id int) {
-			defer wg.Done()
-			defer workerWg.Done()
-			w.processMessages(ctx, id, msgChan, deleteChan)
+			defer allWG.Done()
+			defer workersWG.Done()
+			w.runWorker(ctx, id, w.jobs)
 		}(i)
 	}
 
-	// 3. Start Poller (Blocks until context cancellation)
-	pollErr := w.poll(ctx, msgChan)
+	// 3) Run poller (blocks)
+	pollErr := w.poll(ctx, w.jobs)
 
-	// 4. Shutdown Sequence
-	close(msgChan)    // Stop workers from receiving new messages
-	workerWg.Wait()   // Wait for all workers to finish processing
-	close(deleteChan) // Signal batch deleter that no more deletes are coming
-	wg.Wait()         // Wait for batch deleter to flush final messages
+	// Shutdown sequence:
+	// - stop giving jobs to workers
+	close(w.jobs)
+	workersWG.Wait()
+
+	// - stop deleter and flush
+	close(w.deleteChan)
+	allWG.Wait()
 
 	return pollErr
 }
 
-// processMessages now sends to deleteChan instead of calling SQS directly
-func (w *Worker) processMessages(ctx context.Context, id int, messages <-chan types.Message, deleteChan chan<- types.DeleteMessageBatchRequestEntry) {
-	for msg := range messages {
-		// Execute Handler
-		if err := w.handler(ctx, &msg); err != nil {
-			log.Printf("[Worker %d] Handler failed: %v", id, err)
+func (w *Worker) runWorker(ctx context.Context, id int, jobs <-chan []types.Message) {
+	for rawBatch := range jobs {
+		if len(rawBatch) == 0 {
 			continue
 		}
 
-		// Queue for deletion
-		// We use MessageId as the batch 'Id' identifier
-		deleteChan <- types.DeleteMessageBatchRequestEntry{
-			Id:            msg.MessageId,
-			ReceiptHandle: msg.ReceiptHandle,
+		// Wrap raw messages so handler can call Mark() directly.
+		batch := make([]Message, 0, len(rawBatch))
+		for i := range rawBatch {
+			msg := rawBatch[i]
+			batch = append(batch, Message{
+				raw: msg,
+				mark: func(m types.Message) {
+					// Only enqueue if it has the fields needed for DeleteMessageBatch.
+					if m.MessageId == nil || m.ReceiptHandle == nil {
+						return
+					}
+					w.deleteChan <- deleteEntry{
+						id:            *m.MessageId,
+						receiptHandle: *m.ReceiptHandle,
+					}
+				},
+			})
+		}
+
+		if err := w.handler(ctx, batch); err != nil {
+			log.Printf("[sqs worker %d] handler error (batch size=%d): %v", id, len(batch), err)
+			// On handler error we do not delete; messages will become visible again after visibility timeout.
+			continue
 		}
 	}
 }
 
-// runBatchDeleter aggregates deletes and sends them in batches
-func (w *Worker) runBatchDeleter(ctx context.Context, deleteChan <-chan types.DeleteMessageBatchRequestEntry) {
-	buffer := make([]types.DeleteMessageBatchRequestEntry, 0, w.batchSize)
-	ticker := time.NewTicker(w.batchWindow)
+func (w *Worker) poll(ctx context.Context, out chan<- []types.Message) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		in := &sqs.ReceiveMessageInput{
+			QueueUrl:            gaws.String(w.queueURL),
+			MaxNumberOfMessages: w.maxReceiveBatchSize,
+			WaitTimeSeconds:     w.waitTimeSeconds,
+		}
+		if w.visibilityTimeoutSeconds != nil {
+			in.VisibilityTimeout = *w.visibilityTimeoutSeconds
+		}
+
+		resp, err := w.client.ReceiveMessage(ctx, in)
+		if err != nil {
+			// If context cancelled, bubble it; else return error to allow caller to restart/backoff.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("sqs worker: receive message: %w", err)
+		}
+		if len(resp.Messages) == 0 {
+			continue
+		}
+
+		// Send the received batch as a single unit of work.
+		select {
+		case out <- resp.Messages:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (w *Worker) runBatchDeleter(ctx context.Context, in <-chan deleteEntry) {
+	ticker := time.NewTicker(w.deleteBatchWindow)
 	defer ticker.Stop()
 
-	// Helper to perform the actual network call
+	buffer := make([]types.DeleteMessageBatchRequestEntry, 0, w.deleteBatchSize)
+	seen := make(map[string]struct{}, w.deleteBatchSize*2) // receiptHandle dedupe per flush window
+
 	flush := func() {
 		if len(buffer) == 0 {
 			return
 		}
 
-		// Copy buffer to avoid race conditions if we were reusing it immediately (though here we reset)
 		entries := make([]types.DeleteMessageBatchRequestEntry, len(buffer))
 		copy(entries, buffer)
 
-		// Clear buffer for next round
+		// reset
 		buffer = buffer[:0]
+		for k := range seen {
+			delete(seen, k)
+		}
 
 		_, err := w.client.DeleteMessageBatch(ctx, &sqs.DeleteMessageBatchInput{
-			QueueUrl: aws.String(w.queueURL),
+			QueueUrl: gaws.String(w.queueURL),
 			Entries:  entries,
 		})
-
 		if err != nil {
-			log.Printf("[BatchDeleter] Failed to delete batch: %v", err)
-			// In a production system, you might want to retry specific failed entries
-			// or rely on visibility timeout to re-process them.
+			// If deletion fails, we rely on visibility timeout and re-processing.
+			log.Printf("[sqs deleter] delete batch failed (n=%d): %v", len(entries), err)
 		}
 	}
 
 	for {
 		select {
-		case entry, ok := <-deleteChan:
+		case <-ctx.Done():
+			// Best-effort flush on shutdown using same ctx.
+			flush()
+			return
+
+		case <-ticker.C:
+			flush()
+
+		case e, ok := <-in:
 			if !ok {
-				// Channel closed, flush remaining buffer and exit
 				flush()
 				return
 			}
-			buffer = append(buffer, entry)
+			if e.id == "" || e.receiptHandle == "" {
+				continue
+			}
+			if _, exists := seen[e.receiptHandle]; exists {
+				continue
+			}
+			seen[e.receiptHandle] = struct{}{}
 
-			// If buffer is full, flush immediately
-			if len(buffer) >= w.batchSize {
+			buffer = append(buffer, types.DeleteMessageBatchRequestEntry{
+				Id:            gaws.String(e.id),
+				ReceiptHandle: gaws.String(e.receiptHandle),
+			})
+
+			if len(buffer) >= w.deleteBatchSize {
 				flush()
 			}
-
-		case <-ticker.C:
-			// Time window expired, flush whatever we have
-			flush()
 		}
 	}
-}
-
-// poll remains the same as previous example...
-func (w *Worker) poll(ctx context.Context, msgChan chan<- types.Message) error {
-	// (Same implementation as previous response)
-	// ...
-	return nil
 }
