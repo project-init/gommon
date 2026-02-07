@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -28,6 +28,7 @@ type deleteEntry struct {
 
 type Worker struct {
 	client *sqs.Client
+	logger *slog.Logger
 
 	queueURL string
 
@@ -75,6 +76,7 @@ func New(handler HandlerFunc, optFns ...Option) (*Worker, error) {
 		handler: handler,
 
 		client:   opts.Client,
+		logger:   opts.Logger,
 		queueURL: opts.QueueURL,
 
 		workerCount: opts.WorkerCount,
@@ -90,6 +92,10 @@ func New(handler HandlerFunc, optFns ...Option) (*Worker, error) {
 
 	if w.client == nil {
 		w.client = sqs.NewFromConfig(pkgaws.GetConfig())
+	}
+
+	if w.logger == nil {
+		w.logger = slog.Default()
 	}
 
 	return w, nil
@@ -229,7 +235,7 @@ func (w *Worker) runBatchDeleter(ctx context.Context, in <-chan deleteEntry) {
 		})
 		if err != nil {
 			// If deletion fails, we rely on visibility timeout and re-processing.
-			log.Printf("[sqs deleter] delete batch failed (n=%d): %v", len(entries), err)
+			w.logger.Error("sqs delete batch failed", "count", len(entries), "err", err)
 		}
 	}
 

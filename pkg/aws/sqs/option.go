@@ -2,6 +2,7 @@ package sqs
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -14,6 +15,9 @@ type Options struct {
 
 	// Optional. If nil, New() should create a client using gommon/pkg/aws GetConfig().
 	Client *sqs.Client
+
+	// Optional. If nil, the worker should use slog.Default().
+	Logger *slog.Logger
 
 	// Concurrency
 	WorkerCount int
@@ -53,6 +57,8 @@ func DefaultOptions() Options {
 
 		DeleteBatchSize:   10,
 		DeleteBatchWindow: 1 * time.Second,
+
+		Logger: slog.Default(),
 	}
 }
 
@@ -101,6 +107,13 @@ type Option func(*Options) error
 func WithQueueURL(url string) Option {
 	return func(o *Options) error {
 		o.QueueURL = url
+		return nil
+	}
+}
+
+func WithLogger(l *slog.Logger) Option {
+	return func(o *Options) error {
+		o.Logger = l
 		return nil
 	}
 }
