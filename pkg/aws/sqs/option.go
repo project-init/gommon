@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
-
-	"github.com/aws/aws-sdk-go-v2/service/sqs"
 )
 
 // Options holds all configurable settings for Worker construction.
@@ -14,7 +12,7 @@ type Options struct {
 	QueueURL string
 
 	// Optional. If nil, New() should create a client using gommon/pkg/aws GetConfig().
-	Client *sqs.Client
+	Client sqsClient
 
 	// Optional. If nil, the worker should use slog.Default().
 	Logger *slog.Logger
@@ -47,18 +45,13 @@ type Options struct {
 // QueueURL is still required and must be set via WithQueueURL (or directly) before validation.
 func DefaultOptions() Options {
 	return Options{
-		WorkerCount: 1,
-
-		BatchSize: 10,
-
-		WaitTimeSeconds: 20,
-
+		WorkerCount:              1,
+		BatchSize:                10,
+		WaitTimeSeconds:          20,
 		VisibilityTimeoutSeconds: nil,
-
-		DeleteBatchSize:   10,
-		DeleteBatchWindow: 10 * time.Second,
-
-		Logger: slog.Default(),
+		DeleteBatchSize:          10,
+		DeleteBatchWindow:        10 * time.Second,
+		Logger:                   slog.Default(),
 	}
 }
 
@@ -120,7 +113,7 @@ func WithBatchSize(n int) Option {
 	}
 }
 
-func WithSQSClient(c *sqs.Client) Option {
+func WithSQSClient(c sqsClient) Option {
 	return func(o *Options) error {
 		o.Client = c
 		return nil

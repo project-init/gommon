@@ -8,11 +8,10 @@ import (
 	"sync"
 	"time"
 
-	gaws "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
-
-	pkgaws "github.com/project-init/gommon/pkg/aws"
+	gaws "github.com/project-init/gommon/pkg/aws"
 )
 
 // HandlerFunc is invoked for each received batch.
@@ -26,8 +25,13 @@ type deleteEntry struct {
 	receiptHandle string
 }
 
+type sqsClient interface {
+	ReceiveMessage(ctx context.Context, params *sqs.ReceiveMessageInput, optFns ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error)
+	DeleteMessageBatch(ctx context.Context, params *sqs.DeleteMessageBatchInput, optFns ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
+}
+
 type Worker struct {
-	client *sqs.Client
+	client sqsClient
 	logger *slog.Logger
 
 	queueURL string
@@ -91,7 +95,7 @@ func New(handler HandlerFunc, optFns ...Option) (*Worker, error) {
 	}
 
 	if w.client == nil {
-		w.client = sqs.NewFromConfig(pkgaws.GetConfig())
+		w.client = sqs.NewFromConfig(gaws.GetConfig())
 	}
 
 	if w.logger == nil {
@@ -130,13 +134,19 @@ func (w *Worker) Start(ctx context.Context) error {
 	pollErr := w.poll(ctx, w.jobs)
 
 	// Shutdown sequence:
-	// - stop giving jobs to workers
+	// 1) Stop dispatching new jobs and wait for workers to exit.
+	//    Workers may still call Message.Mark(), so we must not close deleteChan until they are done.
 	close(w.jobs)
 	workersWG.Wait()
 
-	// - stop deleter and flush
+	// 2) Close deleteChan to signal the deleter to flush any buffered deletes and exit.
 	close(w.deleteChan)
 	allWG.Wait()
+
+	// Treat context cancellation/deadline as graceful shutdown.
+	if errors.Is(pollErr, context.Canceled) || errors.Is(pollErr, context.DeadlineExceeded) {
+		return nil
+	}
 
 	return pollErr
 }
@@ -179,7 +189,7 @@ func (w *Worker) poll(ctx context.Context, out chan<- []types.Message) error {
 		}
 
 		in := &sqs.ReceiveMessageInput{
-			QueueUrl:            gaws.String(w.queueURL),
+			QueueUrl:            aws.String(w.queueURL),
 			MaxNumberOfMessages: w.maxReceiveBatchSize,
 			WaitTimeSeconds:     w.waitTimeSeconds,
 		}
@@ -215,7 +225,7 @@ func (w *Worker) runBatchDeleter(ctx context.Context, in <-chan deleteEntry) {
 	buffer := make([]types.DeleteMessageBatchRequestEntry, 0, w.deleteBatchSize)
 	seen := make(map[string]struct{}, w.deleteBatchSize*2) // receiptHandle dedupe per flush window
 
-	flush := func() {
+	flush := func(flushCtx context.Context) {
 		if len(buffer) == 0 {
 			return
 		}
@@ -229,29 +239,40 @@ func (w *Worker) runBatchDeleter(ctx context.Context, in <-chan deleteEntry) {
 			delete(seen, k)
 		}
 
-		_, err := w.client.DeleteMessageBatch(ctx, &sqs.DeleteMessageBatchInput{
-			QueueUrl: gaws.String(w.queueURL),
+		_, err := w.client.DeleteMessageBatch(flushCtx, &sqs.DeleteMessageBatchInput{
+			QueueUrl: aws.String(w.queueURL),
 			Entries:  entries,
 		})
 		if err != nil {
+			// Avoid noisy logs during shutdown/cancellation.
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || flushCtx.Err() != nil {
+				return
+			}
 			// If deletion fails, we rely on visibility timeout and re-processing.
 			w.logger.Error("sqs delete batch failed", "count", len(entries), "err", err)
 		}
 	}
 
+	flushWithTimeout := func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		flush(flushCtx)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
-			// Best-effort flush on shutdown using same ctx.
-			flush()
+			// Parent context canceled: Final best-effort flush with background timeout context.
+			flushWithTimeout()
 			return
 
 		case <-ticker.C:
-			flush()
+			flush(ctx)
 
 		case e, ok := <-in:
 			if !ok {
-				flush()
+				// Channel closed: Final best-effort flush of leftovers with background timeout context.
+				flushWithTimeout()
 				return
 			}
 			if e.id == "" || e.receiptHandle == "" {
@@ -263,12 +284,12 @@ func (w *Worker) runBatchDeleter(ctx context.Context, in <-chan deleteEntry) {
 			seen[e.receiptHandle] = struct{}{}
 
 			buffer = append(buffer, types.DeleteMessageBatchRequestEntry{
-				Id:            gaws.String(e.id),
-				ReceiptHandle: gaws.String(e.receiptHandle),
+				Id:            aws.String(e.id),
+				ReceiptHandle: aws.String(e.receiptHandle),
 			})
 
 			if len(buffer) >= w.deleteBatchSize {
-				flush()
+				flush(ctx)
 			}
 		}
 	}
