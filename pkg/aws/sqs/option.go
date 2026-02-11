@@ -56,7 +56,7 @@ func DefaultOptions() Options {
 		VisibilityTimeoutSeconds: nil,
 
 		DeleteBatchSize:   10,
-		DeleteBatchWindow: 1 * time.Second,
+		DeleteBatchWindow: 10 * time.Second,
 
 		Logger: slog.Default(),
 	}
@@ -67,35 +67,23 @@ func (o Options) Validate() error {
 	if o.QueueURL == "" {
 		return fmt.Errorf("sqs worker: options.QueueURL is required")
 	}
-
 	if o.WorkerCount <= 0 {
 		return fmt.Errorf("sqs worker: options.WorkerCount must be > 0 (got %d)", o.WorkerCount)
 	}
-
-	if o.BatchSize <= 0 {
-		return fmt.Errorf("sqs worker: options.BatchSize must be > 0 (got %d)", o.BatchSize)
+	if o.BatchSize <= 0 || o.BatchSize > 10 {
+		return fmt.Errorf("sqs worker: options.BatchSize must be > 0 and <= 10 (got %d)", o.BatchSize)
 	}
-	if o.BatchSize > 10 {
-		return fmt.Errorf("sqs worker: options.BatchSize must be <= 10 (got %d)", o.BatchSize)
-	}
-
 	if o.WaitTimeSeconds < 0 || o.WaitTimeSeconds > 20 {
 		return fmt.Errorf("sqs worker: options.WaitTimeSeconds must be 0..20 (got %d)", o.WaitTimeSeconds)
 	}
-
 	if o.VisibilityTimeoutSeconds != nil && *o.VisibilityTimeoutSeconds < 0 {
 		return fmt.Errorf("sqs worker: options.VisibilityTimeoutSeconds must be >= 0 (got %d)", *o.VisibilityTimeoutSeconds)
 	}
-
-	if o.DeleteBatchSize <= 0 {
-		return fmt.Errorf("sqs worker: options.DeleteBatchSize must be > 0 (got %d)", o.DeleteBatchSize)
+	if o.DeleteBatchSize <= 0 || o.DeleteBatchSize > 10 {
+		return fmt.Errorf("sqs worker: options.DeleteBatchSize must be > 0 and <= 10 (got %d)", o.DeleteBatchSize)
 	}
-	if o.DeleteBatchSize > 10 {
-		return fmt.Errorf("sqs worker: options.DeleteBatchSize must be <= 10 (got %d)", o.DeleteBatchSize)
-	}
-
-	if o.DeleteBatchWindow <= 0 {
-		return fmt.Errorf("sqs worker: options.DeleteBatchWindow must be > 0 (got %s)", o.DeleteBatchWindow)
+	if o.DeleteBatchWindow <= 0 || o.DeleteBatchWindow > 2*time.Minute {
+		return fmt.Errorf("sqs worker: options.DeleteBatchWindow must be > 0 and <= 2m (got %s)", o.DeleteBatchWindow)
 	}
 
 	return nil
