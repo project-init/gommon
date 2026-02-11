@@ -149,7 +149,7 @@ func TestWorker_PollSetsVisibilityTimeout_WhenConfigured(t *testing.T) {
 
 	cancel()
 
-	_ = <-pollDone
+	<-pollDone
 
 	calls := fc.getReceiveCalls()
 	require.GreaterOrEqual(t, len(calls), 1)
