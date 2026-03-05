@@ -263,11 +263,11 @@ func (a *CognitoAdapter) UpdateAttributes(ctx context.Context, username string, 
 	return nil
 }
 
-func (a *CognitoAdapter) OauthCodeUrl() string {
-	return a.oauthHandler.AuthCodeUrl(generateState(), oauth2.AccessTypeOffline)
+func (a *CognitoAdapter) OauthCodeUrl(state string) string {
+	return a.oauthHandler.AuthCodeUrl(state, oauth2.AccessTypeOffline)
 }
 
-func generateState() string {
+func GenerateState() string {
 	b := make([]rune, 16)
 	for i := range b {
 		b[i] = stateCharacters[rand.IntN(len(stateCharacters))]
