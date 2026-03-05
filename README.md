@@ -8,5 +8,5 @@ Common Go Functionality
 
 ## Useful Docs
 
-* [Code of Conduct](./CODE_OF_CONDUCT.md)
-* [Contribution Guide](./CONTRIBUTING.md)
+- [Code of Conduct](./CODE_OF_CONDUCT.md)
+- [Contribution Guide](./CONTRIBUTING.md)
