@@ -250,6 +250,41 @@ func (a *CognitoAdapter) ResetPassword(ctx context.Context, code string, userNam
 	return nil
 }
 
+func (a *CognitoAdapter) ListUnverifiedUsers(ctx context.Context) ([]types.UserType, error) {
+	var users []types.UserType
+	var paginationToken *string
+
+	for {
+		input := &cognitoidentityprovider.ListUsersInput{
+			UserPoolId:      aws.String(a.userPoolID),
+			Filter:          aws.String("cognito:user_status = \"UNCONFIRMED\""),
+			PaginationToken: paginationToken,
+		}
+		result, err := a.cognitoClient.ListUsers(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("%w: couldn't list unverified users", err)
+		}
+		users = append(users, result.Users...)
+		if result.PaginationToken == nil {
+			break
+		}
+		paginationToken = result.PaginationToken
+	}
+
+	return users, nil
+}
+
+func (a *CognitoAdapter) AdminDeleteUser(ctx context.Context, username string) error {
+	_, err := a.cognitoClient.AdminDeleteUser(ctx, &cognitoidentityprovider.AdminDeleteUserInput{
+		UserPoolId: aws.String(a.userPoolID),
+		Username:   aws.String(username),
+	})
+	if err != nil {
+		return fmt.Errorf("%w: couldn't admin delete user %s", err, username)
+	}
+	return nil
+}
+
 func (a *CognitoAdapter) UpdateAttributes(ctx context.Context, username string, attributes []types.AttributeType) error {
 	input := cognitoidentityprovider.AdminUpdateUserAttributesInput{
 		UserPoolId:     aws.String(a.userPoolID),
