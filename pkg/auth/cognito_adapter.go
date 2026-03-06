@@ -143,6 +143,7 @@ func (a *CognitoAdapter) SignIn(ctx context.Context, email string, password stri
 		var resetRequired *types.PasswordResetRequiredException
 		var userNotFound *types.UserNotFoundException
 		var notAuthorized *types.NotAuthorizedException
+		var limitExceeded *types.LimitExceededException
 		if errors.As(err, &resetRequired) {
 			return nil, fmt.Errorf("%w: reset required - %s", gerror.ErrForbidden, *resetRequired.Message)
 		} else if strings.Contains(err.Error(), "InvalidPasswordException: Invalid password") {
@@ -155,6 +156,9 @@ func (a *CognitoAdapter) SignIn(ctx context.Context, email string, password stri
 		} else if errors.As(err, &notAuthorized) {
 			// User exists, but password given doesn't match
 			return nil, fmt.Errorf("%w: not authorized - %s", gerror.ErrForbidden, *notAuthorized.Message)
+		} else if errors.As(err, &limitExceeded) {
+			// Too many failed login attempts
+			return nil, fmt.Errorf("%w: %s", gerror.ErrTooManyRequests, *limitExceeded.Message)
 		} else {
 			return nil, fmt.Errorf("%w: couldn't sign in user %s. Reason - %s", gerror.ErrBadRequest, email, err.Error())
 		}

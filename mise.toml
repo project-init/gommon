@@ -5,6 +5,9 @@ prettier = "3.8.1"
 golangci-lint = "2.7.2"
 gotestsum = "1.13.0"
 
+# Internal
+"go:github.com/project-init/devex/cmd/release" = "0.6.0"
+
 [env]
 MISE_DISABLE_BACKENDS = "aqua,ubi"
 
@@ -45,8 +48,3 @@ run = "prettier --write ."
 
 [tasks.format-go]
 run = "go fmt ./..."
-
-# Release
-
-[tasks.start-release]
-run = "./scripts/git-tag-release.sh"
