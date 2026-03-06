@@ -3,6 +3,9 @@ go = "1.25.5"
 golangci-lint = "2.7.2"
 gotestsum = "1.13.0"
 
+# Internal
+"go:github.com/project-init/devex/cmd/release" = "0.6.0"
+
 [env]
 MISE_DISABLE_BACKENDS = "aqua,ubi"
 
@@ -26,8 +29,3 @@ run = "golangci-lint run --fix"
 
 [tasks.format]
 run = "go fmt ./..."
-
-# Release
-
-[tasks.start-release]
-run = "./scripts/git-tag-release.sh"
