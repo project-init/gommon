@@ -218,6 +218,7 @@ func (a *CognitoAdapter) DeleteUser(ctx context.Context, accessToken string) err
 	}
 	return nil
 }
+
 // AdminDeleteUser deletes a user from the Cognito User Pool by username using admin credentials.
 // Use this for server-side cleanup where no user access token is available (e.g., removing unconfirmed users).
 // Only removes the user from the pool — unconfirmed users are not persisted in the application DB.
