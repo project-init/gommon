@@ -205,12 +205,29 @@ func (a *CognitoAdapter) UpdatePassword(ctx context.Context, email string, passw
 	return nil
 }
 
+// DeleteUser deletes the user from the Cognito User Pool using their access token.
+// Use this only for user-initiated flows where the user is logged in (e.g., "Delete my account").
+// The pool is inferred from the token. Only removes the user from the pool, not any application data.
+// Not suitable for batch cleanup — use AdminDeleteUser instead, which only requires a username.
 func (a *CognitoAdapter) DeleteUser(ctx context.Context, accessToken string) error {
 	_, err := a.cognitoClient.DeleteUser(ctx, &cognitoidentityprovider.DeleteUserInput{
 		AccessToken: aws.String(accessToken),
 	})
 	if err != nil {
 		return fmt.Errorf("%w: couldn't delete user", err)
+	}
+	return nil
+}
+// AdminDeleteUser deletes a user from the Cognito User Pool by username using admin credentials.
+// Use this for server-side cleanup where no user access token is available (e.g., removing unconfirmed users).
+// Only removes the user from the pool — unconfirmed users are not persisted in the application DB.
+func (a *CognitoAdapter) AdminDeleteUser(ctx context.Context, username string) error {
+	_, err := a.cognitoClient.AdminDeleteUser(ctx, &cognitoidentityprovider.AdminDeleteUserInput{
+		UserPoolId: aws.String(a.userPoolID),
+		Username:   aws.String(username),
+	})
+	if err != nil {
+		return fmt.Errorf("%w: couldn't admin delete user %s", err, username)
 	}
 	return nil
 }
@@ -251,7 +268,7 @@ func (a *CognitoAdapter) ResetPassword(ctx context.Context, code string, userNam
 }
 
 func (a *CognitoAdapter) ListUnverifiedUsers(ctx context.Context) ([]types.UserType, error) {
-	var users []types.UserType
+	users := make([]types.UserType, 0)
 	var paginationToken *string
 
 	for {
@@ -272,17 +289,6 @@ func (a *CognitoAdapter) ListUnverifiedUsers(ctx context.Context) ([]types.UserT
 	}
 
 	return users, nil
-}
-
-func (a *CognitoAdapter) AdminDeleteUser(ctx context.Context, username string) error {
-	_, err := a.cognitoClient.AdminDeleteUser(ctx, &cognitoidentityprovider.AdminDeleteUserInput{
-		UserPoolId: aws.String(a.userPoolID),
-		Username:   aws.String(username),
-	})
-	if err != nil {
-		return fmt.Errorf("%w: couldn't admin delete user %s", err, username)
-	}
-	return nil
 }
 
 func (a *CognitoAdapter) UpdateAttributes(ctx context.Context, username string, attributes []types.AttributeType) error {
