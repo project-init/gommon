@@ -268,7 +268,7 @@ func (a *CognitoAdapter) ResetPassword(ctx context.Context, code string, userNam
 	return nil
 }
 
-func (a *CognitoAdapter) ListUnverifiedUsers(ctx context.Context) ([]types.UserType, error) {
+func (a *CognitoAdapter) ListUnconfirmedUsers(ctx context.Context) ([]types.UserType, error) {
 	users := make([]types.UserType, 0)
 	var paginationToken *string
 
@@ -280,7 +280,7 @@ func (a *CognitoAdapter) ListUnverifiedUsers(ctx context.Context) ([]types.UserT
 		}
 		result, err := a.cognitoClient.ListUsers(ctx, input)
 		if err != nil {
-			return nil, fmt.Errorf("%w: couldn't list unverified users", err)
+			return nil, fmt.Errorf("%w: couldn't list unconfirmed users", err)
 		}
 		users = append(users, result.Users...)
 		if result.PaginationToken == nil {
