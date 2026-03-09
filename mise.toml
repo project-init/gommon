@@ -1,12 +1,12 @@
 [tools]
-go = "1.25.5"
-node = "25.7.0"
+go = "1.26.1"
+node = "25.8.0"
 prettier = "3.8.1"
-golangci-lint = "2.7.2"
+golangci-lint = "2.11.2"
 gotestsum = "1.13.0"
 
 # Internal
-"go:github.com/project-init/devex/cmd/release" = "0.6.0"
+"go:github.com/project-init/devex/cmd/release" = "0.7.0"
 
 [env]
 MISE_DISABLE_BACKENDS = "aqua,ubi"
