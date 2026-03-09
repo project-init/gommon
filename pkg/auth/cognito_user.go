@@ -28,9 +28,9 @@ func userFromGetUserOutput(output *cognitoidentityprovider.GetUserOutput) *Cogni
 	return cognitoUser
 }
 
-func usersFromListUserOutput(output *cognitoidentityprovider.ListUsersOutput) []*CognitoUser {
-	users := make([]*CognitoUser, len(output.Users))
-	for index, user := range output.Users {
+func usersFromListUserOutput(userTypes []types.UserType) []*CognitoUser {
+	users := make([]*CognitoUser, len(userTypes))
+	for index, user := range userTypes {
 		cognitoUser := &CognitoUser{
 			Username: *user.Username,
 		}

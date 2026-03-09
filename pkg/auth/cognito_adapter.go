@@ -188,7 +188,7 @@ func (a *CognitoAdapter) GetUsersByEmail(ctx context.Context, email string) ([]*
 	if err != nil {
 		return nil, err
 	}
-	return usersFromListUserOutput(result), nil
+	return usersFromListUserOutput(result.Users), nil
 }
 
 func (a *CognitoAdapter) UpdatePassword(ctx context.Context, email string, password string) error {
@@ -268,8 +268,8 @@ func (a *CognitoAdapter) ResetPassword(ctx context.Context, code string, userNam
 	return nil
 }
 
-func (a *CognitoAdapter) ListUnconfirmedUsers(ctx context.Context) ([]types.UserType, error) {
-	users := make([]types.UserType, 0)
+func (a *CognitoAdapter) ListUnconfirmedUsers(ctx context.Context) ([]*CognitoUser, error) {
+	var userTypes []types.UserType
 	var paginationToken *string
 
 	for {
@@ -282,14 +282,14 @@ func (a *CognitoAdapter) ListUnconfirmedUsers(ctx context.Context) ([]types.User
 		if err != nil {
 			return nil, fmt.Errorf("%w: couldn't list unconfirmed users", err)
 		}
-		users = append(users, result.Users...)
+		userTypes = append(userTypes, result.Users...)
 		if result.PaginationToken == nil {
 			break
 		}
 		paginationToken = result.PaginationToken
 	}
 
-	return users, nil
+	return usersFromListUserOutput(userTypes), nil
 }
 
 func (a *CognitoAdapter) UpdateAttributes(ctx context.Context, username string, attributes []types.AttributeType) error {
