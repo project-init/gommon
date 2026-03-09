@@ -1,6 +1,6 @@
 module github.com/project-init/gommon
 
-go 1.25.4
+go 1.26.1
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.3
