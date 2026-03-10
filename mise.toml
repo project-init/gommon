@@ -1,7 +1,6 @@
 [tools]
 go = "1.26.1"
-node = "25.8.0"
-prettier = "3.8.1"
+bun = "1.3.9"
 golangci-lint = "2.11.2"
 gotestsum = "1.13.0"
 
@@ -13,6 +12,12 @@ MISE_DISABLE_BACKENDS = "aqua,ubi"
 
 [settings]
 experimental = true
+npm.bun = true
+
+# Setup
+
+[tasks.setup]
+run = "bun install"
 
 # Tests
 
@@ -33,8 +38,8 @@ depends = ["lint-*"]
 run = "golangci-lint run --fix"
 
 [tasks.lint-prettier]
-depends = ["format-prettier-sync"]
-run = "prettier --check ."
+depends = ["setup", "format-prettier-sync"]
+run = "bun run lint"
 
 [tasks.format]
 depends = ["format-*"]
@@ -43,8 +48,8 @@ depends = ["format-*"]
 run = "sh ./scripts/sync-prettier-config.sh"
 
 [tasks.format-prettier]
-depends = ["format-prettier-sync"]
-run = "prettier --write ."
+depends = ["setup", "format-prettier-sync"]
+run = "bun run format"
 
 [tasks.format-go]
 run = "go fmt ./..."

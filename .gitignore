@@ -38,3 +38,6 @@ go.work.sum
 # These are intentionally left untracked since `mise format` will pull down the latest version
 .prettierignore
 prettier.config.json
+
+# Bun/NPM
+node_modules/
