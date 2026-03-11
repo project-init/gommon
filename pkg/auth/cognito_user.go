@@ -2,6 +2,7 @@ package auth
 
 import (
 	"strconv"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
@@ -14,6 +15,7 @@ type CognitoUser struct {
 	GivenName     string
 	FamilyName    string
 	PhoneNumber   string
+	CreatedAt     *time.Time
 }
 
 func userFromGetUserOutput(output *cognitoidentityprovider.GetUserOutput) *CognitoUser {
@@ -32,7 +34,8 @@ func usersFromListUserOutput(userTypes []types.UserType) []*CognitoUser {
 	users := make([]*CognitoUser, len(userTypes))
 	for index, user := range userTypes {
 		cognitoUser := &CognitoUser{
-			Username: *user.Username,
+			Username:  *user.Username,
+			CreatedAt: user.UserCreateDate,
 		}
 
 		for _, attribute := range user.Attributes {
