@@ -3,6 +3,7 @@ module github.com/project-init/gommon
 go 1.26.1
 
 require (
+	connectrpc.com/connect v1.19.1
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.13
 	github.com/aws/aws-sdk-go-v2/feature/rds/auth v1.6.21
