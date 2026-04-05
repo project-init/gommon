@@ -171,7 +171,7 @@ func TestConsumer_PerPartitionDispatch(t *testing.T) {
 	var mu sync.Mutex
 	dispatched := map[int32][]int64{} // partition -> offsets
 
-	handler := func(ctx context.Context, topic string, partition int32, records []Record) {
+	handler := func(ctx context.Context, topic string, partition int32, records []ConsumerRecord) {
 		mu.Lock()
 		defer mu.Unlock()
 		for _, r := range records {
@@ -230,7 +230,7 @@ func TestConsumer_MarkPerRecord(t *testing.T) {
 
 	markDone := make(chan struct{}, 1)
 
-	handler := func(ctx context.Context, topic string, partition int32, records []Record) {
+	handler := func(ctx context.Context, topic string, partition int32, records []ConsumerRecord) {
 		// Only mark even offsets — simulates partial success.
 		for _, r := range records {
 			if r.Offset()%2 == 0 {
@@ -284,7 +284,7 @@ func TestConsumer_GracefulShutdown_DrainsPartitions(t *testing.T) {
 	handlerStarted := make(chan struct{})
 	handlerDone := make(chan struct{})
 
-	handler := func(ctx context.Context, topic string, partition int32, records []Record) {
+	handler := func(ctx context.Context, topic string, partition int32, records []ConsumerRecord) {
 		close(handlerStarted)
 		// Simulate work that takes a moment.
 		time.Sleep(100 * time.Millisecond)
@@ -344,7 +344,7 @@ func TestConsumer_Revocation_DrainsAndCommits(t *testing.T) {
 
 	handlerCalled := make(chan struct{}, 1)
 
-	handler := func(ctx context.Context, topic string, partition int32, records []Record) {
+	handler := func(ctx context.Context, topic string, partition int32, records []ConsumerRecord) {
 		for _, r := range records {
 			r.Mark()
 		}
@@ -404,7 +404,7 @@ func TestConsumer_Revocation_ZombieTimeout(t *testing.T) {
 
 	handlerStarted := make(chan struct{})
 
-	handler := func(ctx context.Context, topic string, partition int32, records []Record) {
+	handler := func(ctx context.Context, topic string, partition int32, records []ConsumerRecord) {
 		close(handlerStarted)
 		// Simulate a stuck handler that ignores context.
 		select {
@@ -464,7 +464,7 @@ func TestConsumer_OnPartitionsLost_CancelsImmediately(t *testing.T) {
 	handlerStarted := make(chan struct{})
 	handlerCtxDone := make(chan struct{})
 
-	handler := func(ctx context.Context, topic string, partition int32, records []Record) {
+	handler := func(ctx context.Context, topic string, partition int32, records []ConsumerRecord) {
 		close(handlerStarted)
 		<-ctx.Done()
 		close(handlerCtxDone)
@@ -524,7 +524,7 @@ func TestConsumer_RecordAccessors(t *testing.T) {
 	}
 
 	var marked bool
-	r := Record{
+	r := ConsumerRecord{
 		raw:  raw,
 		mark: func(_ *kgo.Record) { marked = true },
 	}
@@ -543,10 +543,10 @@ func TestConsumer_RecordAccessors(t *testing.T) {
 	assert.True(t, marked)
 }
 
-func TestRecord_Mark_NilMarkFunc(t *testing.T) {
+func TestConsumerRecord_Mark_NilMarkFunc(t *testing.T) {
 	t.Parallel()
 
-	r := Record{raw: &kgo.Record{}}
+	r := ConsumerRecord{raw: &kgo.Record{}}
 	// Should not panic.
 	r.Mark()
 }
@@ -555,7 +555,7 @@ func TestConsumer_Start_ContextCancelled_ReturnsNil(t *testing.T) {
 	t.Parallel()
 
 	fc := newFakeKafka(t)
-	handler := func(ctx context.Context, topic string, partition int32, records []Record) {}
+	handler := func(ctx context.Context, topic string, partition int32, records []ConsumerRecord) {}
 
 	c := newTestConsumer(t, handler, fc)
 
@@ -571,7 +571,7 @@ func TestConsumer_UntrackedPartition_DoesNotPanic(t *testing.T) {
 	t.Parallel()
 
 	fc := newFakeKafka(t)
-	handler := func(ctx context.Context, topic string, partition int32, records []Record) {}
+	handler := func(ctx context.Context, topic string, partition int32, records []ConsumerRecord) {}
 	c := newTestConsumer(t, handler, fc)
 
 	// Don't assign any partitions. Enqueue fetches for a partition we don't own.

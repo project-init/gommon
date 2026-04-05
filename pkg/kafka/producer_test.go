@@ -71,7 +71,7 @@ func TestProducer_Produce_SingleRecord(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	rec := NewProduceRecord("test-topic", []byte("key"), []byte("value"))
+	rec := NewProducerRecord("test-topic", []byte("key"), []byte("value"))
 
 	err = p.Produce(context.Background(), rec)
 	require.NoError(t, err)
@@ -94,10 +94,10 @@ func TestProducer_Produce_MultipleRecords(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	records := []*ProduceRecord{
-		NewProduceRecord("topic-a", []byte("k1"), []byte("v1")),
-		NewProduceRecord("topic-b", []byte("k2"), []byte("v2")),
-		NewProduceRecord("topic-a", []byte("k3"), []byte("v3")),
+	records := []*ProducerRecord{
+		NewProducerRecord("topic-a", []byte("k1"), []byte("v1")),
+		NewProducerRecord("topic-b", []byte("k2"), []byte("v2")),
+		NewProducerRecord("topic-a", []byte("k3"), []byte("v3")),
 	}
 
 	err = p.Produce(context.Background(), records...)
@@ -120,7 +120,7 @@ func TestProducer_Produce_WithHeaders(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	rec := NewProduceRecord("test-topic", []byte("key"), []byte("value")).
+	rec := NewProducerRecord("test-topic", []byte("key"), []byte("value")).
 		WithHeader("trace-id", []byte("abc123")).
 		WithHeader("content-type", []byte("application/json"))
 
@@ -146,7 +146,7 @@ func TestProducer_Produce_WithPartition(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	rec := NewProduceRecord("test-topic", []byte("key"), []byte("value")).
+	rec := NewProducerRecord("test-topic", []byte("key"), []byte("value")).
 		WithPartition(7)
 
 	err = p.Produce(context.Background(), rec)
@@ -183,7 +183,7 @@ func TestProducer_Produce_Error(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	rec := NewProduceRecord("test-topic", []byte("key"), []byte("value"))
+	rec := NewProducerRecord("test-topic", []byte("key"), []byte("value"))
 
 	err = p.Produce(context.Background(), rec)
 	require.Error(t, err)
@@ -202,10 +202,10 @@ func TestProducer_Produce_PartialError(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	records := []*ProduceRecord{
-		NewProduceRecord("topic-a", []byte("k1"), []byte("v1")),
-		NewProduceRecord("topic-b", []byte("k2"), []byte("v2")),
-		NewProduceRecord("topic-a", []byte("k3"), []byte("v3")),
+	records := []*ProducerRecord{
+		NewProducerRecord("topic-a", []byte("k1"), []byte("v1")),
+		NewProducerRecord("topic-b", []byte("k2"), []byte("v2")),
+		NewProducerRecord("topic-a", []byte("k3"), []byte("v3")),
 	}
 
 	err = p.Produce(context.Background(), records...)
@@ -228,53 +228,35 @@ func TestProducer_Close(t *testing.T) {
 	assert.True(t, fp.isClosed())
 }
 
-func TestProduceRecord_Builder(t *testing.T) {
+func TestProducerRecord_Builder(t *testing.T) {
 	t.Parallel()
 
-	rec := NewProduceRecord("my-topic", []byte("k"), []byte("v")).
+	rec := NewProducerRecord("my-topic", []byte("k"), []byte("v")).
 		WithHeader("h1", []byte("val1")).
 		WithHeader("h2", []byte("val2")).
 		WithPartition(3)
 
-	assert.Equal(t, "my-topic", rec.Topic)
-	assert.Equal(t, []byte("k"), rec.Key)
-	assert.Equal(t, []byte("v"), rec.Value)
-	assert.Equal(t, int32(3), rec.Partition)
-	require.Len(t, rec.Headers, 2)
-	assert.Equal(t, "h1", rec.Headers[0].Key)
-	assert.Equal(t, "h2", rec.Headers[1].Key)
+	assert.Equal(t, "my-topic", rec.raw.Topic)
+	assert.Equal(t, []byte("k"), rec.raw.Key)
+	assert.Equal(t, []byte("v"), rec.raw.Value)
+	assert.Equal(t, int32(3), rec.raw.Partition)
+	require.Len(t, rec.raw.Headers, 2)
+	assert.Equal(t, "h1", rec.raw.Headers[0].Key)
+	assert.Equal(t, "h2", rec.raw.Headers[1].Key)
 }
 
-func TestProduceRecord_DefaultPartition(t *testing.T) {
+func TestProducerRecord_DefaultPartition(t *testing.T) {
 	t.Parallel()
 
-	rec := NewProduceRecord("my-topic", []byte("k"), []byte("v"))
-	assert.Equal(t, int32(-1), rec.Partition, "default partition should be -1")
+	rec := NewProducerRecord("my-topic", []byte("k"), []byte("v"))
+	assert.Equal(t, int32(-1), rec.raw.Partition, "default partition should be -1")
 }
 
-func TestProduceRecord_ToKgo(t *testing.T) {
+func TestProducerRecord_NoHeaders(t *testing.T) {
 	t.Parallel()
 
-	rec := NewProduceRecord("my-topic", []byte("k"), []byte("v")).
-		WithHeader("h1", []byte("val1")).
-		WithPartition(5)
-
-	kgoRec := rec.toKgo()
-	assert.Equal(t, "my-topic", kgoRec.Topic)
-	assert.Equal(t, []byte("k"), kgoRec.Key)
-	assert.Equal(t, []byte("v"), kgoRec.Value)
-	assert.Equal(t, int32(5), kgoRec.Partition)
-	require.Len(t, kgoRec.Headers, 1)
-	assert.Equal(t, "h1", kgoRec.Headers[0].Key)
-	assert.Equal(t, []byte("val1"), kgoRec.Headers[0].Value)
-}
-
-func TestProduceRecord_ToKgo_NoHeaders(t *testing.T) {
-	t.Parallel()
-
-	rec := NewProduceRecord("my-topic", nil, []byte("v"))
-	kgoRec := rec.toKgo()
-	assert.Nil(t, kgoRec.Headers)
+	rec := NewProducerRecord("my-topic", nil, []byte("v"))
+	assert.Nil(t, rec.raw.Headers)
 }
 
 // ---------------------------------------------------------------------------

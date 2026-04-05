@@ -17,8 +17,8 @@ import (
 //
 // The handler MUST respect ctx.Done() to allow timely shutdown during rebalances.
 // The handler MUST be idempotent — Kafka provides at-least-once delivery.
-// Records are only committed if your handler calls Record.Mark() on them.
-type HandlerFunc func(ctx context.Context, topic string, partition int32, records []Record)
+// Records are only committed if your handler calls ConsumerRecord.Mark() on them.
+type HandlerFunc func(ctx context.Context, topic string, partition int32, records []ConsumerRecord)
 
 // consumerClient is the subset of *kgo.Client methods used by Consumer.
 // Unexported to allow test fakes.
@@ -361,7 +361,7 @@ func (c *Consumer) stopAllPartitions() {
 }
 
 // runPartition is the per-partition goroutine. It reads batches from the channel,
-// wraps them into Records, and calls the handler.
+// wraps them into ConsumerRecords, and calls the handler.
 func (c *Consumer) runPartition(ctx context.Context, tp topicPartition, pw *partitionWorker) {
 	defer close(pw.done)
 
@@ -370,10 +370,10 @@ func (c *Consumer) runPartition(ctx context.Context, tp topicPartition, pw *part
 			return // partition revoked or consumer shutting down
 		}
 
-		records := make([]Record, 0, len(batch))
+		records := make([]ConsumerRecord, 0, len(batch))
 		for _, raw := range batch {
 			r := raw // capture loop var
-			records = append(records, Record{
+			records = append(records, ConsumerRecord{
 				raw: r,
 				mark: func(rec *kgo.Record) {
 					c.client.MarkCommitRecords(rec)

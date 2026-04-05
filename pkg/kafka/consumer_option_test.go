@@ -190,7 +190,7 @@ func TestNewConsumer_NilHandler(t *testing.T) {
 func TestNewConsumer_ValidationError(t *testing.T) {
 	t.Parallel()
 
-	handler := func(ctx context.Context, topic string, partition int32, records []Record) {}
+	handler := func(ctx context.Context, topic string, partition int32, records []ConsumerRecord) {}
 
 	// Missing required fields.
 	_, err := NewConsumer(handler)
@@ -201,7 +201,7 @@ func TestNewConsumer_ValidationError(t *testing.T) {
 func TestNewConsumer_NilOptionSkipped(t *testing.T) {
 	t.Parallel()
 
-	handler := func(ctx context.Context, topic string, partition int32, records []Record) {}
+	handler := func(ctx context.Context, topic string, partition int32, records []ConsumerRecord) {}
 
 	_, err := NewConsumer(
 		handler,

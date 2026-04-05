@@ -90,14 +90,14 @@ func buildProducerClient(opts ProducerOptions) (*kgo.Client, error) {
 
 // Produce sends one or more records to Kafka synchronously.
 // It returns the first error encountered across all records, if any.
-func (p *Producer) Produce(ctx context.Context, records ...*ProduceRecord) error {
+func (p *Producer) Produce(ctx context.Context, records ...*ProducerRecord) error {
 	if len(records) == 0 {
 		return nil
 	}
 
 	kgoRecords := make([]*kgo.Record, len(records))
 	for i, r := range records {
-		kgoRecords[i] = r.toKgo()
+		kgoRecords[i] = r.raw
 	}
 
 	results := p.client.ProduceSync(ctx, kgoRecords...)
