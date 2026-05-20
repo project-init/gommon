@@ -17,17 +17,43 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/protoadapt"
 )
 
 type Middleware struct {
-	methodsToProtos map[string]func() proto.Message
-	dataDir         string
+	methodsToProtos     map[string]func() proto.Message
+	methodToErrorProtos map[string][]func() proto.Message
+	dataDir             string
 }
 
 func NewMiddleware(methodsToProtos map[string]func() proto.Message, dataDir string) *Middleware {
 	return &Middleware{
 		methodsToProtos: methodsToProtos,
 		dataDir:         dataDir,
+	}
+}
+
+// NewMiddlewareWithErrorProtos creates a Middleware that additionally honors
+// errorDetails entries in stub fixtures.
+//
+// methodToErrorProtos maps a full gRPC method path (e.g.,
+// "/users.v1.UsersService/GetUser") to a list of zero-arg constructors for the
+// proto types that method may return as rich error details. At read time, each
+// errorDetails JSON entry is unmarshaled (strict, DiscardUnknown: false)
+// against the registered candidates in order; the first successful match is
+// attached to the returned status via WithDetails. Methods absent from the map
+// have their errorDetails silently dropped.
+//
+// See https://grpc.io/docs/guides/error/#richer-error-model.
+func NewMiddlewareWithErrorProtos(
+	methodsToProtos map[string]func() proto.Message,
+	methodToErrorProtos map[string][]func() proto.Message,
+	dataDir string,
+) *Middleware {
+	return &Middleware{
+		methodsToProtos:     methodsToProtos,
+		methodToErrorProtos: methodToErrorProtos,
+		dataDir:             dataDir,
 	}
 }
 
@@ -51,7 +77,7 @@ func (m *Middleware) Stubbed() grpc.UnaryServerInterceptor {
 
 		fullMethodPath := path.Join(m.dataDir, methodPath)
 		hashPath := path.Join(fullMethodPath, fmt.Sprintf("%s.json", hash))
-		protoResponse, protoError, err := responseFromFile(hashPath, protoFunc())
+		protoResponse, protoError, err := m.responseFromFile(hashPath, info.FullMethod, protoFunc())
 		if err != nil {
 			return nil, status.Error(gerror.GrpcFromError(err), fmt.Sprintf("failed to call method %s: %s", info.FullMethod, err))
 		}
@@ -60,7 +86,7 @@ func (m *Middleware) Stubbed() grpc.UnaryServerInterceptor {
 	}
 }
 
-func responseFromFile(hashPath string, protoFunc proto.Message) (proto.Message, error, error) {
+func (m *Middleware) responseFromFile(hashPath string, fullMethod string, protoFunc proto.Message) (proto.Message, error, error) {
 	_, err := os.Stat(hashPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, fmt.Errorf("%w: file not found at %s", gerror.ErrNotFound, hashPath)
@@ -73,7 +99,13 @@ func responseFromFile(hashPath string, protoFunc proto.Message) (proto.Message, 
 
 	errorCode, errorMessage := gjson.GetBytes(bytes, "errorCode"), gjson.GetBytes(bytes, "errorMessage")
 	if errorCode.Exists() && errorMessage.Exists() {
-		return nil, status.Error(codes.Code(int32(errorCode.Int())), errorMessage.String()), nil
+		st := status.New(codes.Code(int32(errorCode.Int())), errorMessage.String())
+		errorDetails := gjson.GetBytes(bytes, "errorDetails")
+
+		if errorDetails.Exists() && errorDetails.IsArray() && len(errorDetails.Array()) > 0 {
+			st, _ = st.WithDetails(m.extractErrorDetails(fullMethod, errorDetails)...)
+		}
+		return nil, st.Err(), nil
 	}
 
 	resp := gjson.Get(string(bytes), "response")
@@ -81,4 +113,31 @@ func responseFromFile(hashPath string, protoFunc proto.Message) (proto.Message, 
 		return nil, nil, fmt.Errorf("%w: failed to unmarshal response at %s", err, hashPath)
 	}
 	return protoFunc, nil, nil
+}
+
+// extractErrorDetails attempts to unmarshal each errorDetails JSON entry
+// against the proto candidates registered for fullMethod. The first candidate
+// that strict-unmarshals (DiscardUnknown: false) wins. Entries with no
+// matching candidate, or methods absent from the registry, are silently
+// dropped.
+func (m *Middleware) extractErrorDetails(fullMethod string, errorDetails gjson.Result) []protoadapt.MessageV1 {
+	var details []protoadapt.MessageV1
+
+	candidates, ok := m.methodToErrorProtos[fullMethod]
+	if !ok {
+		return details
+	}
+
+	for _, detailJSON := range errorDetails.Array() {
+		for _, newMsg := range candidates {
+			msg := newMsg()
+			unmarshalErr := protojson.UnmarshalOptions{DiscardUnknown: false}.Unmarshal([]byte(detailJSON.Raw), msg)
+			if unmarshalErr == nil {
+				details = append(details, protoadapt.MessageV1Of(msg))
+				break
+			}
+		}
+	}
+
+	return details
 }
