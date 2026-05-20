@@ -106,7 +106,12 @@ func RequestAndResponseToFile(requestMessage proto.Message, responseMessage prot
 //     is never read.
 //
 // The on-disk format is the canonical format consumed by Middleware.Stubbed().
-func WriteStubFile(requestMessage proto.Message, responseMessage proto.Message, st *status.Status, requestDirectory string) error {
+func WriteStubFile(
+	requestMessage proto.Message,
+	responseMessage proto.Message,
+	st *status.Status,
+	requestDirectory string,
+) error {
 	if requestMessage == nil {
 		return fmt.Errorf("requestMessage must not be nil")
 	}

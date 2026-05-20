@@ -58,7 +58,12 @@ func NewMiddlewareWithErrorProtos(
 }
 
 func (m *Middleware) Stubbed() grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(
+		ctx context.Context,
+		req interface{},
+		info *grpc.UnaryServerInfo,
+		handler grpc.UnaryHandler,
+	) (interface{}, error) {
 		jsonReq, err := protojson.MarshalOptions{EmitUnpopulated: true}.Marshal(req.(proto.Message))
 		if err != nil {
 			return nil, status.Error(codes.Internal, "failed to marshal json request")
@@ -79,14 +84,21 @@ func (m *Middleware) Stubbed() grpc.UnaryServerInterceptor {
 		hashPath := path.Join(fullMethodPath, fmt.Sprintf("%s.json", hash))
 		protoResponse, protoError, err := m.responseFromFile(hashPath, info.FullMethod, protoFunc())
 		if err != nil {
-			return nil, status.Error(gerror.GrpcFromError(err), fmt.Sprintf("failed to call method %s: %s", info.FullMethod, err))
+			return nil, status.Error(
+				gerror.GrpcFromError(err),
+				fmt.Sprintf("failed to call method %s: %s", info.FullMethod, err),
+			)
 		}
 
 		return protoResponse, protoError
 	}
 }
 
-func (m *Middleware) responseFromFile(hashPath string, fullMethod string, protoFunc proto.Message) (proto.Message, error, error) {
+func (m *Middleware) responseFromFile(
+	hashPath string,
+	fullMethod string,
+	protoFunc proto.Message,
+) (proto.Message, error, error) {
 	_, err := os.Stat(hashPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, fmt.Errorf("%w: file not found at %s", gerror.ErrNotFound, hashPath)
