@@ -17,9 +17,8 @@ import (
 
 const fakeFullMethod = "/test.v1.Service/Method"
 
-// invokeStubbed runs req through Stubbed() and returns the resulting response/error
-// pair. It uses a no-op handler since the middleware never invokes it on the
-// stubbed path.
+// invokeStubbed runs req through Stubbed() and returns the resulting response/error pair. It uses a no-op handler
+// since the middleware never invokes it on the stubbed path.
 func invokeStubbed(t *testing.T, m *Middleware, req proto.Message) (interface{}, error) {
 	t.Helper()
 	interceptor := m.Stubbed()
@@ -43,8 +42,8 @@ func newTestMiddleware(t *testing.T, errorProtos map[string][]func() proto.Messa
 	return NewMiddlewareWithErrorProtos(methodsToProtos, errorProtos, tempDir), tempDir
 }
 
-// fixtureDir returns the directory layout the middleware expects for the fake
-// method, and ensures it exists for WriteStubFile.
+// fixtureDir returns the directory layout the middleware expects for the fake method, and ensures it exists for
+// WriteStubFile.
 func fixtureDir(t *testing.T, baseDir string) string {
 	t.Helper()
 	// info.FullMethod "/test.v1.Service/Method" -> "/test/v1/Service/Method"
@@ -116,8 +115,7 @@ func Test_Stubbed_ErrorDetails_Dropped_When_Method_Not_Registered(t *testing.T) 
 }
 
 func Test_Stubbed_BasicError_NoDetails_Still_Works(t *testing.T) {
-	// Regression guard: a fixture without errorDetails must still produce the
-	// correct code+message.
+	// Regression guard: a fixture without errorDetails must still produce the correct code+message.
 	m, baseDir := newTestMiddleware(t, nil)
 
 	st := status.New(codes.NotFound, "user not found")
@@ -135,9 +133,8 @@ func Test_Stubbed_BasicError_NoDetails_Still_Works(t *testing.T) {
 }
 
 func Test_Stubbed_ErrorDetails_FirstParsableCandidateWins(t *testing.T) {
-	// BadRequest is registered before ErrorInfo. A BadRequest-shaped detail
-	// should match BadRequest; an ErrorInfo-shaped detail should fall through
-	// to ErrorInfo.
+	// BadRequest is registered before ErrorInfo. A BadRequest-shaped detail should match BadRequest; an
+	// ErrorInfo-shaped detail should fall through to ErrorInfo.
 	errorProtos := map[string][]func() proto.Message{
 		fakeFullMethod: {
 			func() proto.Message { return &errdetails.BadRequest{} },
@@ -177,10 +174,9 @@ func Test_Stubbed_ErrorDetails_FirstParsableCandidateWins(t *testing.T) {
 }
 
 func Test_Stubbed_ErrorDetails_UnmatchedDetailIsDropped(t *testing.T) {
-	// Only BadRequest is registered. An ErrorInfo-shaped detail will not
-	// strict-unmarshal against BadRequest (unknown fields "reason"/"domain") and
-	// should be silently dropped, while a BadRequest-shaped detail still comes
-	// through.
+	// Only BadRequest is registered. An ErrorInfo-shaped detail will not strict-unmarshal against BadRequest
+	// (unknown fields "reason"/"domain") and should be silently dropped, while a BadRequest-shaped detail still
+	// comes through.
 	errorProtos := map[string][]func() proto.Message{
 		fakeFullMethod: {
 			func() proto.Message { return &errdetails.BadRequest{} },
@@ -210,8 +206,7 @@ func Test_Stubbed_ErrorDetails_UnmatchedDetailIsDropped(t *testing.T) {
 }
 
 func Test_Stubbed_SuccessResponseStillWorks(t *testing.T) {
-	// Regression guard: a success fixture (no errorCode/errorMessage) must
-	// still unmarshal the response.
+	// Regression guard: a success fixture (no errorCode/errorMessage) must still unmarshal the response.
 	m, baseDir := newTestMiddleware(t, nil)
 
 	require.NoError(t, WriteStubFile(&emptypb.Empty{}, &emptypb.Empty{}, nil, fixtureDir(t, baseDir)))

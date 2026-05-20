@@ -112,8 +112,7 @@ func Test_WriteStubFile(t *testing.T) {
 
 	t.Run("error fixture: errorMessage with quotes and newlines produces valid JSON", func(t *testing.T) {
 		tempDir := t.TempDir()
-		// Regression test against the unsafe string-concat behavior in
-		// the deprecated RequestAndResponseToFile.
+		// Regression test against the unsafe string-concat behavior in the deprecated RequestAndResponseToFile.
 		nasty := "broke it: \"quote\", backslash \\ and\nnewline"
 		st := status.New(codes.Internal, nasty)
 

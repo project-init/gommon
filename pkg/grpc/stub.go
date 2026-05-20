@@ -31,18 +31,15 @@ func GetStubHash(jsonBytes []byte) (string, error) {
 	return hex.EncodeToString(hashBytes[:]), nil
 }
 
-// Deprecated: Prefer WriteStubFile, which accepts a *status.Status (carrying
-// code, message, and rich error details) and writes the canonical on-disk
-// format consumed by Middleware.Stubbed().
+// Deprecated: Prefer WriteStubFile, which accepts a *status.Status (carrying code, message, and rich error details)
+// and writes the canonical on-disk format consumed by Middleware.Stubbed().
 //
 // RequestAndResponseToFile has several known limitations:
-//   - It always writes a `response` field, even when errorCode is set. The
-//     runtime middleware ignores `response` whenever errorCode is present, so
-//     that data is dead bytes on disk.
+//   - It always writes a `response` field, even when errorCode is set. The runtime middleware ignores `response`
+//     whenever errorCode is present, so that data is dead bytes on disk.
 //   - It does not support errorDetails (the gRPC richer error model).
-//   - It builds JSON via string concatenation and does not safely escape the
-//     errorMessage value, which can produce invalid JSON for messages
-//     containing quotes, backslashes, or newlines.
+//   - It builds JSON via string concatenation and does not safely escape the errorMessage value, which can produce
+//     invalid JSON for messages containing quotes, backslashes, or newlines.
 //
 // This function is retained for backward compatibility.
 func RequestAndResponseToFile(requestMessage proto.Message, responseMessage proto.Message, errorCode *int, errorMessage *string, requestDirectory string) error {
@@ -90,20 +87,17 @@ func RequestAndResponseToFile(requestMessage proto.Message, responseMessage prot
 	return WriteToFileAndSync(outputFilePath, out.Bytes(), 0644)
 }
 
-// WriteStubFile writes a stub fixture for the given request to
-// <requestDirectory>/<md5(canonicalized request JSON)>.json.
+// WriteStubFile writes a stub fixture for the given request to <requestDirectory>/<md5(canonicalized request)>.json.
 //
 // The fixture format depends on st:
 //
-//   - If st is nil or st.Code() == codes.OK, a success fixture is written
-//     containing `request` and `response`. responseMessage must be non-nil.
+//   - If st is nil or st.Code() == codes.OK, a success fixture is written containing `request` and `response`.
+//     responseMessage must be non-nil.
 //
-//   - If st is non-nil and st.Code() != codes.OK, an error fixture is written
-//     containing `request`, `errorCode`, `errorMessage`, and (if any are
-//     present on the status) `errorDetails`. The responseMessage parameter is
-//     IGNORED in this case, matching the runtime behavior of
-//     Middleware.Stubbed(): when errorCode is set on disk, the response field
-//     is never read.
+//   - If st is non-nil and st.Code() != codes.OK, an error fixture is written containing `request`, `errorCode`,
+//     `errorMessage`, and (if any are present on the status) `errorDetails`. The responseMessage parameter is
+//     IGNORED in this case, matching the runtime behavior of Middleware.Stubbed(): when errorCode is set on disk,
+//     the response field is never read.
 //
 // The on-disk format is the canonical format consumed by Middleware.Stubbed().
 func WriteStubFile(

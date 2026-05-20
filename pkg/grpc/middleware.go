@@ -33,23 +33,16 @@ func NewMiddleware(methodsToProtos map[string]func() proto.Message, dataDir stri
 	}
 }
 
-// NewMiddlewareWithErrorProtos creates a Middleware that additionally honors
-// errorDetails entries in stub fixtures.
+// NewMiddlewareWithErrorProtos creates a Middleware that additionally honors errorDetails entries in stub fixtures.
 //
-// methodToErrorProtos maps a full gRPC method path (e.g.,
-// "/users.v1.UsersService/GetUser") to a list of zero-arg constructors for the
-// proto types that method may return as rich error details. At read time, each
-// errorDetails JSON entry is unmarshaled (strict, DiscardUnknown: false)
-// against the registered candidates in order; the first successful match is
-// attached to the returned status via WithDetails. Methods absent from the map
-// have their errorDetails silently dropped.
+// methodToErrorProtos maps a full gRPC method path (e.g., "/users.v1.UsersService/GetUser") to a list of zero-arg
+// constructors for the proto types that method may return as rich error details. At read time, each errorDetails
+// JSON entry is unmarshaled (strict, DiscardUnknown: false) against the registered candidates in order; the first
+// successful match is attached to the returned status via WithDetails. Methods absent from the map have their
+// errorDetails silently dropped.
 //
 // See https://grpc.io/docs/guides/error/#richer-error-model.
-func NewMiddlewareWithErrorProtos(
-	methodsToProtos map[string]func() proto.Message,
-	methodToErrorProtos map[string][]func() proto.Message,
-	dataDir string,
-) *Middleware {
+func NewMiddlewareWithErrorProtos(methodsToProtos map[string]func() proto.Message, methodToErrorProtos map[string][]func() proto.Message, dataDir string) *Middleware {
 	return &Middleware{
 		methodsToProtos:     methodsToProtos,
 		methodToErrorProtos: methodToErrorProtos,
@@ -58,12 +51,7 @@ func NewMiddlewareWithErrorProtos(
 }
 
 func (m *Middleware) Stubbed() grpc.UnaryServerInterceptor {
-	return func(
-		ctx context.Context,
-		req interface{},
-		info *grpc.UnaryServerInfo,
-		handler grpc.UnaryHandler,
-	) (interface{}, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		jsonReq, err := protojson.MarshalOptions{EmitUnpopulated: true}.Marshal(req.(proto.Message))
 		if err != nil {
 			return nil, status.Error(codes.Internal, "failed to marshal json request")
@@ -94,11 +82,7 @@ func (m *Middleware) Stubbed() grpc.UnaryServerInterceptor {
 	}
 }
 
-func (m *Middleware) responseFromFile(
-	hashPath string,
-	fullMethod string,
-	protoFunc proto.Message,
-) (proto.Message, error, error) {
+func (m *Middleware) responseFromFile(hashPath string, fullMethod string, protoFunc proto.Message) (proto.Message, error, error) {
 	_, err := os.Stat(hashPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, fmt.Errorf("%w: file not found at %s", gerror.ErrNotFound, hashPath)
@@ -127,11 +111,9 @@ func (m *Middleware) responseFromFile(
 	return protoFunc, nil, nil
 }
 
-// extractErrorDetails attempts to unmarshal each errorDetails JSON entry
-// against the proto candidates registered for fullMethod. The first candidate
-// that strict-unmarshals (DiscardUnknown: false) wins. Entries with no
-// matching candidate, or methods absent from the registry, are silently
-// dropped.
+// extractErrorDetails attempts to unmarshal each errorDetails JSON entry against the proto candidates registered
+// for fullMethod. The first candidate that strict-unmarshals (DiscardUnknown: false) wins. Entries with no matching
+// candidate, or methods absent from the registry, are silently dropped.
 func (m *Middleware) extractErrorDetails(fullMethod string, errorDetails gjson.Result) []protoadapt.MessageV1 {
 	var details []protoadapt.MessageV1
 
