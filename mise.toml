@@ -6,10 +6,10 @@ golangci-lint = "2.11.2"
 gotestsum = "1.13.0"
 
 # Internal
-"go:github.com/project-init/devex/cmd/release" = "0.7.0"
+"github:project-init/devex" = "v0.14.1"
 
 [env]
-MISE_DISABLE_BACKENDS = "aqua,ubi"
+MISE_DISABLE_BACKENDS = "ubi"
 
 [settings]
 experimental = true

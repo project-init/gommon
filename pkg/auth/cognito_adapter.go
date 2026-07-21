@@ -168,6 +168,55 @@ func (a *CognitoAdapter) SignIn(ctx context.Context, email string, password stri
 	return authResult, err
 }
 
+// RefreshSession exchanges a valid refresh token for new access and ID tokens via the Cognito
+// REFRESH_TOKEN_AUTH flow. The result carries a fresh AccessToken/IdToken and ExpiresIn; the
+// refresh token itself is unchanged (Cognito does not reissue it in this flow).
+func (a *CognitoAdapter) RefreshSession(ctx context.Context, refreshToken string) (*types.AuthenticationResultType, error) {
+	output, err := a.cognitoClient.InitiateAuth(ctx, &cognitoidentityprovider.InitiateAuthInput{
+		AuthFlow:       types.AuthFlowTypeRefreshTokenAuth,
+		ClientId:       aws.String(a.appClientID),
+		AuthParameters: map[string]string{"REFRESH_TOKEN": refreshToken},
+	})
+	if err != nil {
+		var notAuthorized *types.NotAuthorizedException
+		var limitExceeded *types.LimitExceededException
+		if errors.As(err, &notAuthorized) {
+			// Refresh token is expired, revoked, or otherwise invalid.
+			return nil, fmt.Errorf("%w: not authorized - %s", gerror.ErrPermissionDenied, *notAuthorized.Message)
+		} else if errors.As(err, &limitExceeded) {
+			return nil, fmt.Errorf("%w: %s", gerror.ErrTooManyRequests, *limitExceeded.Message)
+		}
+
+		return nil, fmt.Errorf("%w: couldn't refresh session. Reason - %s", gerror.ErrBadRequest, err.Error())
+	}
+
+	return output.AuthenticationResult, nil
+}
+
+// RevokeToken revokes a refresh token and every access token issued from it, backing server-side
+// logout. Revoking an already-invalid token is treated as success so logout stays idempotent. The
+// app client must have token revocation enabled.
+func (a *CognitoAdapter) RevokeToken(ctx context.Context, refreshToken string) error {
+	_, err := a.cognitoClient.RevokeToken(ctx, &cognitoidentityprovider.RevokeTokenInput{
+		ClientId: aws.String(a.appClientID),
+		Token:    aws.String(refreshToken),
+	})
+	if err != nil {
+		var notAuthorized *types.NotAuthorizedException
+		var unsupported *types.UnsupportedTokenTypeException
+		if errors.As(err, &notAuthorized) {
+			// Already revoked or invalid; logout is idempotent.
+			return nil
+		} else if errors.As(err, &unsupported) {
+			return fmt.Errorf("%w: token revocation is not enabled for this app client - %s", gerror.ErrBadRequest, *unsupported.Message)
+		}
+
+		return fmt.Errorf("%w: couldn't revoke token. Reason - %s", gerror.ErrBadRequest, err.Error())
+	}
+
+	return nil
+}
+
 func (a *CognitoAdapter) GetUserByToken(ctx context.Context, token string) (*CognitoUser, error) {
 	input := &cognitoidentityprovider.GetUserInput{
 		AccessToken: aws.String(token),
