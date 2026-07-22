@@ -204,8 +204,10 @@ func (a *CognitoAdapter) RevokeToken(ctx context.Context, refreshToken string) e
 	if err != nil {
 		var notAuthorized *types.NotAuthorizedException
 		var unsupported *types.UnsupportedTokenTypeException
-		if errors.As(err, &notAuthorized) {
-			// Already revoked or invalid; logout is idempotent.
+		if errors.As(err, &notAuthorized) || strings.Contains(err.Error(), "NotAuthorizedException") {
+			// Already revoked or invalid; logout is idempotent. RevokeToken does not model
+			// NotAuthorizedException, so the SDK returns it as a generic error that the typed
+			// check misses; match the error code string as well.
 			return nil
 		} else if errors.As(err, &unsupported) {
 			return fmt.Errorf("%w: token revocation is not enabled for this app client - %s", gerror.ErrBadRequest, *unsupported.Message)
