@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
+	"github.com/aws/smithy-go"
 	"github.com/coreos/go-oidc"
 	"github.com/golang-jwt/jwt/v5"
 	gaws "github.com/project-init/gommon/pkg/aws"
@@ -202,12 +203,12 @@ func (a *CognitoAdapter) RevokeToken(ctx context.Context, refreshToken string) e
 		Token:    aws.String(refreshToken),
 	})
 	if err != nil {
-		var notAuthorized *types.NotAuthorizedException
+		var apiErr smithy.APIError
 		var unsupported *types.UnsupportedTokenTypeException
-		if errors.As(err, &notAuthorized) || strings.Contains(err.Error(), "NotAuthorizedException") {
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "NotAuthorizedException" {
 			// Already revoked or invalid; logout is idempotent. RevokeToken does not model
-			// NotAuthorizedException, so the SDK returns it as a generic error that the typed
-			// check misses; match the error code string as well.
+			// NotAuthorizedException, so the SDK surfaces it as a generic API error rather than a
+			// typed *types.NotAuthorizedException; match on the parsed error code instead.
 			return nil
 		} else if errors.As(err, &unsupported) {
 			return fmt.Errorf("%w: token revocation is not enabled for this app client - %s", gerror.ErrBadRequest, *unsupported.Message)
