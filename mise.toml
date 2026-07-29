@@ -1,5 +1,5 @@
 [tools]
-go = "1.26.1"
+go = "1.26.5"
 node = "25.8.0"
 prettier = "3.8.1"
 golangci-lint = "2.11.2"
