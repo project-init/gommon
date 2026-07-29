@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	gerror "github.com/project-init/gommon/pkg/errors"
+	grpcerrors "github.com/project-init/gommon/pkg/errors/grpc"
 
 	"github.com/tidwall/gjson"
 
@@ -73,7 +74,7 @@ func (m *Middleware) Stubbed() grpc.UnaryServerInterceptor {
 		protoResponse, protoError, err := m.responseFromFile(hashPath, info.FullMethod, protoFunc())
 		if err != nil {
 			return nil, status.Error(
-				gerror.GrpcFromError(err),
+				grpcerrors.GrpcFromError(err),
 				fmt.Sprintf("failed to call method %s: %s", info.FullMethod, err),
 			)
 		}
