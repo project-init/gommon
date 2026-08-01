@@ -4,13 +4,13 @@ go 1.26.5
 
 require (
 	connectrpc.com/connect v1.20.0
-	github.com/aws/aws-sdk-go-v2 v1.41.9
+	github.com/aws/aws-sdk-go-v2 v1.43.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.20
 	github.com/aws/aws-sdk-go-v2/feature/rds/auth v1.6.25
 	github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider v1.61.0
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.9
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.42.29
-	github.com/aws/smithy-go v1.26.0
+	github.com/aws/smithy-go v1.27.5
 	github.com/coreos/go-oidc v2.5.0+incompatible
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
