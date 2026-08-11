@@ -7,9 +7,9 @@ jobs:
   lint-and-format:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v4.2.3
         with:
           install: true
           experimental: true
@@ -21,8 +21,5 @@ jobs:
       - name: Format
         run: mise format
 
-      - name: Auto Commit
-        uses: stefanzweifel/git-auto-commit-action@v7
-        with:
-          commit_message: "chore: automated linting"
-          commit_user_name: auto-gen-bot
+      - name: Git Diff
+        run: git diff --exit-code
