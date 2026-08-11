@@ -54,6 +54,17 @@ func MapAndRedact(config any) map[string]any {
 		}
 
 		if !isSafe {
+			// Omit unset unsafe fields — nothing to redact if the value was never configured.
+			switch fieldVal.Kind() {
+			case reflect.Ptr, reflect.Interface:
+				if fieldVal.IsNil() {
+					continue
+				}
+			case reflect.String:
+				if fieldVal.String() == "" {
+					continue
+				}
+			}
 			result[fieldName] = "redacted"
 			continue
 		}

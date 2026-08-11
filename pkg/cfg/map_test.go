@@ -53,8 +53,8 @@ func TestMapAndRedact(t *testing.T) {
 	// unsafe has value — redacted
 	assert.Equal(t, "redacted", result["unsafeWithValue"])
 
-	// unsafe doesn't have value — still redacted
-	assert.Equal(t, "redacted", result["unsafeNoValue"])
+	// unsafe doesn't have value (empty string) — omitted entirely
+	assert.NotContains(t, result, "unsafeNoValue")
 
 	// safe int with non-zero value — included
 	assert.Equal(t, 42, result["safeIntWithValue"])
@@ -65,7 +65,7 @@ func TestMapAndRedact(t *testing.T) {
 	// unsafe int with value — redacted
 	assert.Equal(t, "redacted", result["unsafeIntValue"])
 
-	// unsafe int with zero value — still redacted
+	// unsafe int with zero value — still redacted (0 is a valid value, not "unset")
 	assert.Equal(t, "redacted", result["unsafeIntZero"])
 
 	// safe sub-config: recurses, inner safe field visible, inner unsafe field redacted
