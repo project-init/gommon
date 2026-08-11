@@ -59,7 +59,7 @@ func MapAndRedact(config any) map[string]any {
 
 		// Unsafe: omit if empty (nothing to redact), otherwise redact.
 		switch fieldVal.Kind() {
-		case reflect.Ptr, reflect.Interface:
+		case reflect.Pointer, reflect.Interface:
 			if fieldVal.IsNil() {
 				continue
 			}
