@@ -1,0 +1,7 @@
+##@ Test
+
+[tasks.test]
+depends = ["test:*"]
+
+[tasks."test:unit"]
+run = "gotestsum --format testname -- ./..."

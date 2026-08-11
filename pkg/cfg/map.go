@@ -3,9 +3,8 @@ package cfg
 import "reflect"
 
 // MapAndRedact converts Config struct to a map and redacts unsafe fields.
-// Fields tagged safe:"true" are included; unsafe fields are replaced with "redacted".
-// Safe string fields that are empty and safe pointer/interface fields that are nil are omitted entirely.
-// Numeric zero values are included as-is since 0 is a valid config value.
+// Fields tagged safe:"true" are always included as-is.
+// Unsafe fields are omitted when empty (empty string, nil pointer/interface) and shown as "redacted" when set.
 // Safe struct fields recurse so their own field-level safe tags are respected.
 func MapAndRedact(config any) map[string]any {
 	result := map[string]any{}
@@ -53,23 +52,12 @@ func MapAndRedact(config any) map[string]any {
 			continue
 		}
 
-		if !isSafe {
-			// Omit unset unsafe fields — nothing to redact if the value was never configured.
-			switch fieldVal.Kind() {
-			case reflect.Ptr, reflect.Interface:
-				if fieldVal.IsNil() {
-					continue
-				}
-			case reflect.String:
-				if fieldVal.String() == "" {
-					continue
-				}
-			}
-			result[fieldName] = "redacted"
+		if isSafe {
+			result[fieldName] = fieldVal.Interface()
 			continue
 		}
 
-		// Safe scalar: omit if nil pointer or empty string, otherwise include.
+		// Unsafe: omit if empty (nothing to redact), otherwise redact.
 		switch fieldVal.Kind() {
 		case reflect.Ptr, reflect.Interface:
 			if fieldVal.IsNil() {
@@ -80,7 +68,7 @@ func MapAndRedact(config any) map[string]any {
 				continue
 			}
 		}
-		result[fieldName] = fieldVal.Interface()
+		result[fieldName] = "redacted"
 	}
 
 	return result

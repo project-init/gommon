@@ -47,13 +47,13 @@ func TestMapAndRedact(t *testing.T) {
 	// safe has value — included as-is
 	assert.Equal(t, "visible", result["safeWithValue"])
 
-	// safe doesn't have value (empty string) — omitted entirely
-	assert.NotContains(t, result, "safeWithoutValue")
+	// safe doesn't have value — still included (empty string is a valid safe value)
+	assert.Equal(t, "", result["safeWithoutValue"])
 
 	// unsafe has value — redacted
 	assert.Equal(t, "redacted", result["unsafeWithValue"])
 
-	// unsafe doesn't have value (empty string) — omitted entirely
+	// unsafe doesn't have value (empty string) — omitted entirely (nothing to redact)
 	assert.NotContains(t, result, "unsafeNoValue")
 
 	// safe int with non-zero value — included
