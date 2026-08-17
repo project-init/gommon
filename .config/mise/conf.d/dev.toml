@@ -1,0 +1,16 @@
+##@ Container Actions
+
+[tasks."dev:up:infrastructure"]
+description = "Start Docker infrastructure"
+run = "docker compose -f docker/docker-compose.yaml up -d --wait"
+
+[tasks."dev:logs:infrastructure"]
+description = "Show Docker infrastructure status and logs"
+run = """
+docker compose -f docker/docker-compose.yaml ps
+docker compose -f docker/docker-compose.yaml logs --no-color --timestamps
+"""
+
+[tasks."dev:down:infrastructure"]
+description = "Stop Docker infrastructure"
+run = "docker compose -f docker/docker-compose.yaml down --remove-orphans"

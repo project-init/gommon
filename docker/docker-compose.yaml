@@ -1,0 +1,25 @@
+services:
+  localstack:
+    # The current `latest` image requires a LocalStack auth token. Keep the
+    # integration tests on the last community release so CI remains offline
+    # and does not depend on a developer's LocalStack account.
+    image: localstack/localstack:4.14.0
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./localstack:/etc/localstack/init/ready.d:ro
+    environment:
+      AWS_DEFAULT_REGION: us-east-1
+      SERVICES: events,sqs
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS http://localhost:4566/_localstack/health >/dev/null &&
+          awslocal sqs get-queue-url --region us-east-1
+          --queue-name gommon-events-dev >/dev/null &&
+          awslocal events describe-event-bus --region us-east-1
+          --name gommon-events-dev >/dev/null
+      interval: 2s
+      timeout: 5s
+      retries: 30
