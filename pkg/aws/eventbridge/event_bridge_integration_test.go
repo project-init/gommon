@@ -11,8 +11,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
-	eventbridgetypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/google/uuid"
@@ -31,47 +29,13 @@ func TestPublish_DeliversEventToRuleTarget(t *testing.T) {
 	config, err := awsconfig.LoadDefaultConfig(ctx)
 	require.NoError(t, err)
 
-	eventBridgeClient := eventbridge.NewFromConfig(config)
 	sqsClient := sqs.NewFromConfig(config)
-
-	suffix := uuid.NewString()
-	ruleName := "gommon-rule-" + suffix
 
 	queue, err := sqsClient.GetQueueUrl(ctx, &sqs.GetQueueUrlInput{
 		QueueName: aws.String(queueName),
 	})
 	require.NoError(t, err)
 	queueURL := aws.ToString(queue.QueueUrl)
-
-	queueAttributes, err := sqsClient.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
-		QueueUrl:       aws.String(queueURL),
-		AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameQueueArn},
-	})
-	require.NoError(t, err)
-	queueARN := queueAttributes.Attributes[string(sqstypes.QueueAttributeNameQueueArn)]
-
-	eventPattern, err := json.Marshal(map[string]any{
-		"source": []string{"gommon.integration"},
-	})
-	require.NoError(t, err)
-
-	_, err = eventBridgeClient.PutRule(ctx, &eventbridge.PutRuleInput{
-		EventBusName: aws.String(busName),
-		Name:         aws.String(ruleName),
-		EventPattern: aws.String(string(eventPattern)),
-		State:        eventbridgetypes.RuleStateEnabled,
-	})
-	require.NoError(t, err)
-
-	_, err = eventBridgeClient.PutTargets(ctx, &eventbridge.PutTargetsInput{
-		EventBusName: aws.String(busName),
-		Rule:         aws.String(ruleName),
-		Targets: []eventbridgetypes.Target{{
-			Arn: aws.String(queueARN),
-			Id:  aws.String("sqs-target"),
-		}},
-	})
-	require.NoError(t, err)
 
 	client, err := New(busName, 5*time.Second, 3)
 	require.NoError(t, err)
@@ -85,12 +49,12 @@ func TestPublish_DeliversEventToRuleTarget(t *testing.T) {
 	require.NoError(t, err)
 
 	var delivered struct {
-		Detail     string `json:"detail"`
-		DetailType string `json:"detail-type"`
-		Source     string `json:"source"`
+		Detail     json.RawMessage `json:"detail"`
+		DetailType string          `json:"detail-type"`
+		Source     string          `json:"source"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(aws.ToString(message.Body)), &delivered))
-	require.Equal(t, detail, delivered.Detail)
+	require.JSONEq(t, detail, string(delivered.Detail))
 	require.Equal(t, "OrderCreated", delivered.DetailType)
 	require.Equal(t, "gommon.integration", delivered.Source)
 }

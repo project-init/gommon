@@ -10,9 +10,13 @@ run = "gotestsum --format testname -- ./..."
 description = "Run integration tests against Docker infrastructure"
 depends = ["dev:up:infrastructure"]
 depends_post = ["dev:down:infrastructure"]
+run = "mise run test:integration:only"
+
+[tasks."test:integration:only"]
+description = "Run integration tests against Docker infrastructure"
 run = "gotestsum --format testname -- -tags=integration ./..."
 
-[tasks."test:integration".env]
+[tasks."test:integration:only".env]
 AWS_ACCESS_KEY_ID = "test"
 AWS_SECRET_ACCESS_KEY = "test"
 AWS_SESSION_TOKEN = "test"
