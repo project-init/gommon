@@ -1,10 +1,13 @@
 services:
   localstack:
-    image: localstack/localstack:latest
+    # The current `latest` image requires a LocalStack auth token. Keep the
+    # integration tests on the last community release so CI remains offline
+    # and does not depend on a developer's LocalStack account.
+    image: localstack/localstack:4
     ports:
       - "4566:4566"
     volumes:
-      - ${PWD}/docker/localstack:/etc/localstack/init/ready.d:ro
+      - ./localstack:/etc/localstack/init/ready.d:ro
     environment:
       AWS_DEFAULT_REGION: us-east-1
       SERVICES: eventbridge,sqs
