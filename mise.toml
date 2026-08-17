@@ -1,12 +1,12 @@
 [tools]
-go = "1.26.5"
-node = "25.8.0"
-prettier = "3.8.1"
+go = "1.26.6"
+node = "26.7.0"
+prettier = "3.9.6"
 golangci-lint = "2.12.2"
 gotestsum = "1.13.0"
 
 # Internal
-"github:project-init/devex" = "v0.16.5"
+"github:project-init/devex" = "v0.18.1"
 
 [settings]
 experimental = true

@@ -1,0 +1,15 @@
+services:
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"
+    volumes:
+      - ${PWD}/docker/localstack:/etc/localstack/init/ready.d:ro
+    environment:
+      AWS_DEFAULT_REGION: us-east-1
+      SERVICES: eventbridge,sqs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
