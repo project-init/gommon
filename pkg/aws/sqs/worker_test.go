@@ -1,8 +1,10 @@
 package sqs
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +23,8 @@ type fakeSQS struct {
 
 	receiveCalls []*sqs.ReceiveMessageInput
 	deleteCalls  []*sqs.DeleteMessageBatchInput
+	deleteOutput *sqs.DeleteMessageBatchOutput
+	deleteErr    error
 
 	receiveQueue chan receiveResult
 
@@ -60,10 +64,14 @@ func (f *fakeSQS) ReceiveMessage(ctx context.Context, in *sqs.ReceiveMessageInpu
 	}
 }
 
-func (f *fakeSQS) DeleteMessageBatch(ctx context.Context, in *sqs.DeleteMessageBatchInput, _ ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error) {
+func (f *fakeSQS) DeleteMessageBatch(
+	ctx context.Context, in *sqs.DeleteMessageBatchInput, _ ...func(*sqs.Options),
+) (*sqs.DeleteMessageBatchOutput, error) {
 	f.mu.Lock()
 	f.deleteCalls = append(f.deleteCalls, in)
 	cb := f.onDelete
+	output := f.deleteOutput
+	err := f.deleteErr
 	f.mu.Unlock()
 
 	if cb != nil {
@@ -76,7 +84,20 @@ func (f *fakeSQS) DeleteMessageBatch(ctx context.Context, in *sqs.DeleteMessageB
 		return nil, ctx.Err()
 	default:
 	}
-	return &sqs.DeleteMessageBatchOutput{}, nil
+
+	if output == nil {
+		output = &sqs.DeleteMessageBatchOutput{}
+	}
+
+	return output, err
+}
+
+func (f *fakeSQS) setDeleteResult(output *sqs.DeleteMessageBatchOutput, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.deleteOutput = output
+	f.deleteErr = err
 }
 
 func (f *fakeSQS) enqueueReceive(out *sqs.ReceiveMessageOutput, err error) {
@@ -236,11 +257,12 @@ func TestWorker_RunWorker_MarkEnqueuesDeletes_AndDeleterFlushesBySize(t *testing
 	defer deletedMu.Unlock()
 
 	require.Len(t, deleted, 3)
-	got := map[string]string{}
-	for _, e := range deleted {
-		got[aws.ToString(e.Id)] = aws.ToString(e.ReceiptHandle)
+
+	receiptHandles := make([]string, 0, len(deleted))
+	for _, entry := range deleted {
+		receiptHandles = append(receiptHandles, aws.ToString(entry.ReceiptHandle))
 	}
-	assert.Equal(t, map[string]string{"m1": "r1", "m2": "r2", "m3": "r3"}, got)
+	assert.ElementsMatch(t, []string{"r1", "r2", "r3"}, receiptHandles)
 }
 
 func TestWorker_RunWorker_MarkBestEffort_NoIDOrReceiptHandle(t *testing.T) {
@@ -337,10 +359,209 @@ func TestWorker_RunBatchDeleter_DedupesByReceiptHandleWithinFlushWindow(t *testi
 	defer mu.Unlock()
 
 	require.Len(t, entries, 2)
-	assert.Equal(t, aws.ToString(entries[0].Id), "a")
+	assert.Equal(t, aws.ToString(entries[0].Id), "0")
 	assert.Equal(t, aws.ToString(entries[0].ReceiptHandle), "rh-1")
-	assert.Equal(t, aws.ToString(entries[1].Id), "b")
+	assert.Equal(t, aws.ToString(entries[1].Id), "1")
 	assert.Equal(t, aws.ToString(entries[1].ReceiptHandle), "rh-2")
+}
+
+func TestWorker_RunBatchDeleter_LogsPartialDeleteFailures(t *testing.T) {
+	t.Parallel()
+
+	fc := newFakeSQS(t)
+	fc.setDeleteResult(
+		&sqs.DeleteMessageBatchOutput{
+			Failed: []types.BatchResultErrorEntry{
+				{
+					Id:          aws.String("0"),
+					Code:        aws.String("ReceiptHandleIsInvalid"),
+					Message:     aws.String("invalid receipt handle"),
+					SenderFault: true,
+				},
+			},
+		},
+		nil,
+	)
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	w := &Worker{
+		client:            fc,
+		logger:            logger,
+		queueURL:          "https://example.com/queue",
+		deleteBatchSize:   10,
+		deleteBatchWindow: 10 * time.Second,
+	}
+
+	in := make(chan deleteEntry, 1)
+	deleterDone := make(chan struct{})
+
+	go func() {
+		defer close(deleterDone)
+		w.runBatchDeleter(t.Context(), in)
+	}()
+
+	in <- deleteEntry{
+		id:            "message-1",
+		receiptHandle: "receipt-1",
+	}
+	close(in)
+
+	select {
+	case <-deleterDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for batch deleter")
+	}
+
+	output := logs.String()
+	assert.Contains(t, output, "sqs delete batch entry failed")
+	assert.Contains(t, output, "id=0")
+	assert.Contains(t, output, "code=ReceiptHandleIsInvalid")
+	assert.Contains(t, output, "invalid receipt handle")
+	assert.Contains(t, output, "sender_fault=true")
+}
+
+func TestWorker_RunBatchDeleter_UsesUniqueIDsForRepeatedMessage(t *testing.T) {
+	t.Parallel()
+
+	fc := newFakeSQS(t)
+	deleted := make(chan []types.DeleteMessageBatchRequestEntry, 1)
+
+	fc.onDelete = func(in *sqs.DeleteMessageBatchInput) {
+		deleted <- in.Entries
+	}
+
+	w := &Worker{
+		client:            fc,
+		queueURL:          "https://example.com/queue",
+		deleteBatchSize:   10,
+		deleteBatchWindow: 10 * time.Second,
+	}
+
+	in := make(chan deleteEntry, 2)
+	deleterDone := make(chan struct{})
+
+	go func() {
+		defer close(deleterDone)
+		w.runBatchDeleter(t.Context(), in)
+	}()
+
+	// SQS keeps the same MessageId when redelivering a message,
+	// but each delivery has a different receipt handle.
+	in <- deleteEntry{id: "same-message", receiptHandle: "receipt-1"}
+	in <- deleteEntry{id: "same-message", receiptHandle: "receipt-2"}
+	close(in)
+
+	var entries []types.DeleteMessageBatchRequestEntry
+	select {
+	case entries = <-deleted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for delete batch")
+	}
+
+	<-deleterDone
+
+	require.Len(t, entries, 2)
+
+	assert.Equal(t, "receipt-1", aws.ToString(entries[0].ReceiptHandle))
+	assert.Equal(t, "receipt-2", aws.ToString(entries[1].ReceiptHandle))
+
+	assert.NotEqual(
+		t,
+		aws.ToString(entries[0].Id),
+		aws.ToString(entries[1].Id),
+		"delete entry IDs must be unique within one AWS batch",
+	)
+}
+
+func TestWorker_Start_DrainsMarkedMessagesDuringShutdown(t *testing.T) {
+	t.Parallel()
+
+	fc := newFakeSQS(t)
+
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	deleted := make(chan []types.DeleteMessageBatchRequestEntry, 1)
+
+	fc.onDelete = func(in *sqs.DeleteMessageBatchInput) {
+		deleted <- in.Entries
+	}
+
+	handler := func(ctx context.Context, batch []Message) {
+		close(handlerStarted)
+
+		// Simulate an active database operation during shutdown.
+		<-releaseHandler
+
+		batch[0].Mark()
+	}
+
+	w, err := New(
+		handler,
+		WithQueueURL("https://example.com/queue"),
+		WithSQSClient(fc),
+		WithWorkerCount(1),
+		WithBatchSize(1),
+		WithDeleteBatchSize(10),
+		WithDeleteBatchWindow(10*time.Second),
+	)
+	require.NoError(t, err)
+
+	fc.enqueueReceive(
+		&sqs.ReceiveMessageOutput{
+			Messages: []types.Message{
+				{
+					MessageId:     aws.String("message-1"),
+					ReceiptHandle: aws.String("receipt-1"),
+				},
+			},
+		},
+		nil,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startDone := make(chan error, 1)
+
+	go func() {
+		startDone <- w.Start(ctx)
+	}()
+
+	select {
+	case <-handlerStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler to start")
+	}
+
+	// Stop polling while the handler is still processing.
+	cancel()
+
+	// Start must wait for the active handler.
+	select {
+	case err := <-startDone:
+		t.Fatalf("worker returned before handler finished: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// The handler finishes successfully after shutdown has started.
+	close(releaseHandler)
+
+	var entries []types.DeleteMessageBatchRequestEntry
+	select {
+	case entries = <-deleted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for final delete")
+	}
+
+	require.Len(t, entries, 1)
+	assert.Equal(t, "receipt-1", aws.ToString(entries[0].ReceiptHandle))
+
+	select {
+	case err := <-startDone:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for worker shutdown")
+	}
 }
 
 func TestWorker_Start_ReceivesBatch_HandlerMarks_DeletesHappen(t *testing.T) {
@@ -420,9 +641,9 @@ func TestWorker_Start_ReceivesBatch_HandlerMarks_DeletesHappen(t *testing.T) {
 
 	// Ensure the receipt handles we saw were deleted.
 	require.Len(t, got, 2)
-	assert.Equal(t, aws.ToString(got[0].Id), "a")
+	assert.Equal(t, aws.ToString(got[0].Id), "0")
 	assert.Equal(t, aws.ToString(got[0].ReceiptHandle), "rh-1")
-	assert.Equal(t, aws.ToString(got[1].Id), "b")
+	assert.Equal(t, aws.ToString(got[1].Id), "0")
 	assert.Equal(t, aws.ToString(got[1].ReceiptHandle), "rh-2")
 }
 

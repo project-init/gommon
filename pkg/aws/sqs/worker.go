@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -219,6 +220,7 @@ func (w *Worker) poll(ctx context.Context, out chan<- []types.Message) error {
 }
 
 func (w *Worker) runBatchDeleter(ctx context.Context, in <-chan deleteEntry) {
+	deleteCtx := context.WithoutCancel(ctx)
 	ticker := time.NewTicker(w.deleteBatchWindow)
 	defer ticker.Stop()
 
@@ -239,7 +241,7 @@ func (w *Worker) runBatchDeleter(ctx context.Context, in <-chan deleteEntry) {
 			delete(seen, k)
 		}
 
-		_, err := w.client.DeleteMessageBatch(flushCtx, &sqs.DeleteMessageBatchInput{
+		output, err := w.client.DeleteMessageBatch(flushCtx, &sqs.DeleteMessageBatchInput{
 			QueueUrl: aws.String(w.queueURL),
 			Entries:  entries,
 		})
@@ -250,28 +252,39 @@ func (w *Worker) runBatchDeleter(ctx context.Context, in <-chan deleteEntry) {
 			}
 			// If deletion fails, we rely on visibility timeout and re-processing.
 			w.logger.Error("sqs delete batch failed", "count", len(entries), "err", err)
+			return
+		}
+		if output == nil {
+			return
+		}
+
+		for _, failed := range output.Failed {
+			w.logger.Error(
+				"sqs delete batch entry failed",
+				"id", aws.ToString(failed.Id),
+				"code", aws.ToString(failed.Code),
+				"message", aws.ToString(failed.Message),
+				"sender_fault", failed.SenderFault,
+			)
 		}
 	}
 
 	flushWithTimeout := func() {
-		flushCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		flushCtx, cancel := context.WithTimeout(deleteCtx, 3*time.Second)
 		defer cancel()
 		flush(flushCtx)
 	}
 
 	for {
 		select {
-		case <-ctx.Done():
-			// Parent context canceled: Final best-effort flush with background timeout context.
-			flushWithTimeout()
-			return
 
 		case <-ticker.C:
-			flush(ctx)
+			flushWithTimeout()
 
 		case e, ok := <-in:
 			if !ok {
-				// Channel closed: Final best-effort flush of leftovers with background timeout context.
+				// Channel closed: handlers are finished, so flush remaining deletes
+				// with a cancellation-independent timeout before exiting
 				flushWithTimeout()
 				return
 			}
@@ -284,12 +297,12 @@ func (w *Worker) runBatchDeleter(ctx context.Context, in <-chan deleteEntry) {
 			seen[e.receiptHandle] = struct{}{}
 
 			buffer = append(buffer, types.DeleteMessageBatchRequestEntry{
-				Id:            aws.String(e.id),
+				Id:            aws.String(strconv.Itoa(len(buffer))),
 				ReceiptHandle: aws.String(e.receiptHandle),
 			})
 
 			if len(buffer) >= w.deleteBatchSize {
-				flush(ctx)
+				flushWithTimeout()
 			}
 		}
 	}
