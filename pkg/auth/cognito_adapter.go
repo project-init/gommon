@@ -257,6 +257,33 @@ func (a *CognitoAdapter) UpdatePassword(ctx context.Context, email string, passw
 	return nil
 }
 
+// ChangePassword changes a signed-in user's own password, verifying the previous one. Self-service
+// via the user's access token, so Cognito enforces the password policy and any reuse rules — unlike
+// UpdatePassword, which sets a password with admin privilege. Use this for a "change password" flow;
+// use UpdatePassword only for an admin reset with no current password.
+func (a *CognitoAdapter) ChangePassword(ctx context.Context, accessToken string, previousPassword string, proposedPassword string) error {
+	_, err := a.cognitoClient.ChangePassword(ctx, &cognitoidentityprovider.ChangePasswordInput{
+		AccessToken:      aws.String(accessToken),
+		PreviousPassword: aws.String(previousPassword),
+		ProposedPassword: aws.String(proposedPassword),
+	})
+	if err != nil {
+		var invalidPassword *types.InvalidPasswordException
+		var notAuthorized *types.NotAuthorizedException
+		var limitExceeded *types.LimitExceededException
+		if errors.As(err, &invalidPassword) {
+			return fmt.Errorf("%w: %s", gerror.ErrBadRequest, *invalidPassword.Message)
+		} else if errors.As(err, &notAuthorized) {
+			return fmt.Errorf("%w: %s", gerror.ErrForbidden, *notAuthorized.Message)
+		} else if errors.As(err, &limitExceeded) {
+			return fmt.Errorf("%w: %s", gerror.ErrTooManyRequests, *limitExceeded.Message)
+		}
+
+		return fmt.Errorf("%w: couldn't change password", err)
+	}
+	return nil
+}
+
 // DeleteUser deletes the user from the Cognito User Pool using their access token.
 // Use this only for user-initiated flows where the user is logged in (e.g., "Delete my account").
 // The pool is inferred from the token. Only removes the user from the pool, not any application data.
