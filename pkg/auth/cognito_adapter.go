@@ -220,6 +220,32 @@ func (a *CognitoAdapter) RevokeToken(ctx context.Context, refreshToken string) e
 	return nil
 }
 
+// GlobalSignOut revokes every access and refresh token issued to the user identified by accessToken,
+// signing them out of all devices. Use it to invalidate other sessions after a password change: the
+// caller re-signs-in afterward to mint a fresh session that survives the revocation.
+//
+// accessToken authorizes the call, so a rejected token surfaces as ErrPermissionDenied rather than
+// success: unlike revoking a single token, a rejected credential here means Cognito revoked nothing
+// and the other sessions live on. Pass a freshly minted token and retry on that error.
+func (a *CognitoAdapter) GlobalSignOut(ctx context.Context, accessToken string) error {
+	_, err := a.cognitoClient.GlobalSignOut(ctx, &cognitoidentityprovider.GlobalSignOutInput{
+		AccessToken: aws.String(accessToken),
+	})
+	if err != nil {
+		var notAuthorized *types.NotAuthorizedException
+		var tooManyRequests *types.TooManyRequestsException
+		if errors.As(err, &notAuthorized) {
+			return fmt.Errorf("%w: %s", gerror.ErrPermissionDenied, *notAuthorized.Message)
+		} else if errors.As(err, &tooManyRequests) {
+			return fmt.Errorf("%w: %s", gerror.ErrTooManyRequests, *tooManyRequests.Message)
+		}
+
+		return fmt.Errorf("%w: couldn't sign out user globally. Reason - %s", gerror.ErrBadRequest, err.Error())
+	}
+
+	return nil
+}
+
 func (a *CognitoAdapter) GetUserByToken(ctx context.Context, token string) (*CognitoUser, error) {
 	input := &cognitoidentityprovider.GetUserInput{
 		AccessToken: aws.String(token),
