@@ -15,7 +15,11 @@ type CognitoUser struct {
 	GivenName     string
 	FamilyName    string
 	PhoneNumber   string
-	CreatedAt     *time.Time
+	// Cognito account status, e.g. CONFIRMED or EXTERNAL_PROVIDER. A federated account that has never
+	// been given a password reports EXTERNAL_PROVIDER, so this tells apart the accounts that can
+	// authenticate with a password from those that cannot. Only ListUsers reports it; GetUser does not.
+	Status    string
+	CreatedAt *time.Time
 }
 
 func userFromGetUserOutput(output *cognitoidentityprovider.GetUserOutput) *CognitoUser {
@@ -35,6 +39,7 @@ func usersFromListUserOutput(userTypes []types.UserType) []*CognitoUser {
 	for index, user := range userTypes {
 		cognitoUser := &CognitoUser{
 			Username:  *user.Username,
+			Status:    string(user.UserStatus),
 			CreatedAt: user.UserCreateDate,
 		}
 
