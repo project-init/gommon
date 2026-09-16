@@ -36,5 +36,5 @@ package configs
 //	}
 
 type SQS struct {
-	QueueURL string `env:"QUEUE_URL" yaml:"queueUrl" safe:"true"`
+	QueueURL string `env:"SQS_QUEUE_URL" yaml:"queueUrl" safe:"true"`
 }
