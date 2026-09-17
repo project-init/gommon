@@ -7,7 +7,7 @@ import "time"
 //
 //	type Config struct {
 //		// EventBridge
-//		EventBridgeConfig cfg.EventBridgeConfig `env:"EVENT_BRIDGE" yaml:"EventBridge" safe:"true"`
+//		EventBridgeConfig configs.EventBridge `yaml:"eventbridge" safe:"true"`
 //	}
 //
 //	var (
@@ -37,7 +37,7 @@ import "time"
 //		return configuration
 //	}
 type EventBridge struct {
-	EventBusName     string        `env:"EVENT_BUS_NAME" yaml:"eventBusName" safe:"true"`
-	Timeout          time.Duration `env:"TIMEOUT" yaml:"timeout" safe:"true"`
-	MaxRetryAttempts int           `env:"MAX_RETRY_ATTEMPTS" yaml:"maxRetryAttempts" safe:"true"`
+	EventBusName     string        `env:"EVENT_BRIDGE_EVENT_BUS_NAME" yaml:"eventBusName" safe:"true"`
+	Timeout          time.Duration `env:"EVENT_BRIDGE_TIMEOUT" yaml:"timeout" env-default:"5s" safe:"true"`
+	MaxRetryAttempts int           `env:"EVENT_BRIDGE_MAX_RETRY_ATTEMPTS" yaml:"maxRetryAttempts" env-default:"3" safe:"true"`
 }
