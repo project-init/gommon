@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	updateScopeGlobal   = "global"
-	updateScopeEndpoint = "endpoint"
+	UpdateScopeGlobal   = "global"
+	UpdateScopeEndpoint = "endpoint"
 )
 
 type Requirement struct {
@@ -72,7 +72,7 @@ func evaluateRequirement(
 		return nil, err
 	}
 	if belowGlobal {
-		global.Scope = updateScopeGlobal
+		global.Scope = UpdateScopeGlobal
 		return global, nil
 	}
 
@@ -86,7 +86,7 @@ func evaluateRequirement(
 		return nil, err
 	}
 	if belowEndpoint {
-		endpoint.Scope = updateScopeEndpoint
+		endpoint.Scope = UpdateScopeEndpoint
 		return endpoint, nil
 	}
 
