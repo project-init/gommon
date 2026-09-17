@@ -69,7 +69,7 @@ func TestInterceptor(t *testing.T) {
 			MinimumBuild:   50,
 			StoreURL:       "https://apple.com/app",
 		}
-		
+
 		req := connect.NewRequest(&struct{}{})
 		req.Header().Set(HeaderPlatform, "ios")
 		req.Header().Set(HeaderVersion, "1.0.0") // 1.0.0 < 2.0.0
@@ -77,7 +77,7 @@ func TestInterceptor(t *testing.T) {
 
 		_, err := unaryFunc(context.Background(), req)
 		require.Error(t, err)
-		
+
 		var connectErr *connect.Error
 		require.True(t, errors.As(err, &connectErr))
 		assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
@@ -97,7 +97,7 @@ func TestInterceptor(t *testing.T) {
 			MinimumBuild:   50,
 			StoreURL:       "https://google.com/app", // Custom endpoint URL override
 		}
-		
+
 		req := connect.NewRequest(&struct{}{})
 		req.Header().Set(HeaderPlatform, "android")
 		req.Header().Set(HeaderVersion, "1.5.0")
