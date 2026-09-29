@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+
+	gerror "github.com/project-init/gommon/pkg/errors"
+	gerrhttp "github.com/project-init/gommon/pkg/errors/http"
 )
 
 // Client handles communication with Jira Rest API
@@ -89,4 +93,15 @@ type httpStatusError struct {
 
 func (e *httpStatusError) Error() string {
 	return fmt.Sprintf("Jira returned HTTP %d: %s", e.StatusCode, e.Body)
+}
+
+// Unwrap maps the status to a gommon error sentinel, such as errors.ErrNotFound for a 404. A
+// client error with no sentinel of its own unwraps to nil, never to a server error.
+func (e *httpStatusError) Unwrap() error {
+	sentinel := gerrhttp.ToErrorFromHTTP(e.StatusCode)
+	if e.StatusCode < http.StatusInternalServerError && errors.Is(sentinel, gerror.ErrInternalServerError) {
+		return nil
+	}
+
+	return sentinel
 }
