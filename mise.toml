@@ -6,7 +6,7 @@ golangci-lint = "2.13.2"
 gotestsum = "1.13.0"
 
 # Internal
-"github:project-init/devex" = "v0.21.4"
+"github:project-init/devex" = "v0.21.7"
 
 [settings]
 experimental = true
