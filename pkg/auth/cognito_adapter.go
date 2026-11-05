@@ -338,6 +338,33 @@ func (a *CognitoAdapter) AdminDeleteUser(ctx context.Context, username string) e
 	return nil
 }
 
+// AdminUserGlobalSignOut signs a pool user out of every device: Cognito stops accepting the user's refresh tokens,
+// and their access tokens on its own user-pool operations. A service that verifies an access or ID token itself
+// accepts it until it expires. It runs on admin credentials, so unlike GlobalSignOut it needs no token from the user.
+// It leaves the managed login session cookie in place.
+//
+// The caller's IAM role needs cognito-idp:AdminUserGlobalSignOut on the pool. A missing user returns an error
+// wrapping ErrNotFound, and throttling one wrapping ErrTooManyRequests. Errors leave out the username, which may be
+// an email address.
+func (a *CognitoAdapter) AdminUserGlobalSignOut(ctx context.Context, username string) error {
+	_, err := a.cognitoClient.AdminUserGlobalSignOut(ctx, &cognitoidentityprovider.AdminUserGlobalSignOutInput{
+		UserPoolId: aws.String(a.userPoolID),
+		Username:   aws.String(username),
+	})
+	if err != nil {
+		var userNotFound *types.UserNotFoundException
+		var tooManyRequests *types.TooManyRequestsException
+		if errors.As(err, &userNotFound) {
+			return fmt.Errorf("%w: %s", gerror.ErrNotFound, userNotFound.ErrorMessage())
+		} else if errors.As(err, &tooManyRequests) {
+			return fmt.Errorf("%w: %s", gerror.ErrTooManyRequests, tooManyRequests.ErrorMessage())
+		}
+
+		return fmt.Errorf("%w: couldn't admin sign out user", err)
+	}
+	return nil
+}
+
 func (a *CognitoAdapter) ForgotPassword(ctx context.Context, userName string) (*string, error) {
 	output, err := a.cognitoClient.ForgotPassword(ctx, &cognitoidentityprovider.ForgotPasswordInput{
 		ClientId: aws.String(a.appClientID),
