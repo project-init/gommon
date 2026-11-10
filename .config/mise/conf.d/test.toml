@@ -4,7 +4,7 @@
 depends = ["test:*"]
 
 [tasks."test:unit"]
-run = "gotestsum --format testname -- ./..."
+run = "gotestsum --format testname -- -tags=unit ./..."
 
 [tasks."test:integration"]
 description = "Run integration tests against Docker infrastructure"
