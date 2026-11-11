@@ -1,0 +1,12 @@
+name: Dependency Updates
+on:
+  schedule:
+    - cron: "0 8 * * 1" # Runs automatically every Monday at 8am
+  workflow_dispatch:
+
+jobs:
+  update:
+    uses: project-init/infrastructure/.github/workflows/reusable-update-deps.yaml@main
+    with:
+      reviewers: "project-init/admin"
+      run-command: "devex sre dependencies upgrade --all"

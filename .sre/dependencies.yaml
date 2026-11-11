@@ -1,0 +1,13 @@
+dependencies:
+  # Ecosystems `devex sre dependencies upgrade --all` runs.
+  upgrade: [go, mise]
+  go:
+    # Stay on the current minor. gommon is a library, so a weekly run must not cross minors.
+    target: patch
+    # go.mod holds the minor line's floor; mise pins the patch. The current 1.26.6 floor
+    # stays until the minor itself changes.
+    directive: minor
+  mise:
+    policies:
+      # golangci-lint majors change its config format, so they move by hand.
+      golangci-lint: minor
