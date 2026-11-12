@@ -90,7 +90,9 @@ func TestResolveTokenReportsEmptyGHOutput(t *testing.T) {
 
 func TestResolveTokenStopsWhenGHHangs(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
-	writeGH(t, "#!/bin/sh\n/bin/sleep 30\n")
+	// exec replaces the shell. A child sleep keeps stdout open, so Output waits
+	// until that pipe closes and the timeout does not return on Linux.
+	writeGH(t, "#!/bin/sh\nexec /bin/sleep 30\n")
 	previous := ghAuthTimeout
 	ghAuthTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { ghAuthTimeout = previous })

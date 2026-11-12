@@ -356,7 +356,7 @@ func TestRoundTripReturnsABodyItCannotReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	body, _ := io.ReadAll(response.Body)
 	if calls != 1 || slept || response.StatusCode != http.StatusTooManyRequests || string(body) != "slow down" {
 		t.Errorf("calls = %d, slept = %v, status = %d, body = %q", calls, slept, response.StatusCode, body)

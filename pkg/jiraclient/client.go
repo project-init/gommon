@@ -94,7 +94,7 @@ func (c *Client) Do(request *http.Request, responseTarget any) error {
 			return err
 		}
 		if response == nil {
-			return errors.New("Jira returned an empty response")
+			return errors.New("jira returned an empty response")
 		}
 
 		if retryable(response.StatusCode) && attempt < maxRetries && canReplay(request) {
