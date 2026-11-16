@@ -30,7 +30,10 @@ var ghAuthTimeout = 15 * time.Second
 // Each attempt waits DefaultTimeout. A 429 or 5xx is retried up to MaxRetries times, as is a
 // primary or secondary rate limit. Retry-After is the wait when GitHub sends a positive
 // number of seconds. A primary limit waits until X-RateLimit-Reset, a Unix timestamp.
-// Either of those waits is capped at one hour.
+// Either of those waits is capped at one hour. While a request waits out a Retry-After, every
+// other request through the client waits with it. Otherwise a spent primary limit, marked by
+// X-RateLimit-Remaining 0, or a 5xx holds only its own request, and a secondary rate limit or a
+// 429 holds every request.
 // A client timeout returns an error that wraps errors.ErrTimeout and does not include the request URL.
 func New(token string, baseURL string) (*gh.Client, error) {
 	return newClient(token, baseURL, nil)

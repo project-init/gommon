@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	gerror "github.com/project-init/gommon/pkg/errors"
@@ -33,11 +34,17 @@ const (
 
 // retryTransport retries GitHub responses that are safe to send again.
 // go-github owns Client.Do, so the loop has to live on the http.Client passed to gh.NewClient.
+// While one request waits out a Retry-After, a secondary rate limit, or a 429, every request
+// through the transport waits with it: GitHub asks clients to stop sending while limited, and
+// counts concurrent requests toward its secondary limits.
 type retryTransport struct {
 	base    http.RoundTripper
 	token   string
 	timeout time.Duration
 	sleep   func(context.Context, time.Duration) error
+
+	mu       sync.Mutex
+	resumeAt time.Time // when a rate limit lets requests go out again
 }
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -71,11 +78,15 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		attemptReq.Header.Set("Authorization", "Bearer "+t.token)
 	}
 
+	var waited time.Time // the latest hold this request has already waited out
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
 			if err := rewind(attemptReq); err != nil {
 				return nil, err
 			}
+		}
+		if err := t.awaitHold(req.Context(), sleep, &waited); err != nil {
+			return nil, err
 		}
 
 		response, err := attemptClient.Do(attemptReq)
@@ -91,11 +102,15 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 
 		retry, body, consumed, err := classify(response)
-		if err != nil {
+		retrying := retry && attempt < MaxRetries && canReplay(req)
+		if err != nil && !retrying {
 			return nil, err
 		}
-		if retry && attempt < MaxRetries && canReplay(req) {
-			delay := retryWait(response, body, attempt)
+		if retrying {
+			delay, shared := retryWait(response, body, attempt)
+			if shared {
+				delay, waited = t.hold(delay)
+			}
 			if !consumed {
 				discard(response)
 			}
@@ -108,6 +123,36 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			response.Body = io.NopCloser(bytes.NewReader(body))
 		}
 		return response, nil
+	}
+}
+
+// hold keeps every request waiting for delay, unless an earlier hold lasts longer. It returns
+// how long this request waits and the hold's end.
+func (t *retryTransport) hold(delay time.Duration) (time.Duration, time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if until := time.Now().Add(delay); until.After(t.resumeAt) {
+		t.resumeAt = until
+		return delay, until
+	}
+	return time.Until(t.resumeAt), t.resumeAt
+}
+
+// awaitHold waits out any hold ending after waited, the end of the last hold this request waited
+// out.
+func (t *retryTransport) awaitHold(ctx context.Context, sleep func(context.Context, time.Duration) error, waited *time.Time) error {
+	for {
+		t.mu.Lock()
+		resumeAt := t.resumeAt
+		t.mu.Unlock()
+		delay := time.Until(resumeAt)
+		if !resumeAt.After(*waited) || delay <= 0 {
+			return nil
+		}
+		if err := sleep(ctx, delay); err != nil {
+			return err
+		}
+		*waited = resumeAt
 	}
 }
 
@@ -130,22 +175,22 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 }
 
 // classify reports whether the response should be sent again.
-// A 403 body is read so a secondary rate limit can be told apart from a missing scope.
-// consumed is true when Body has been closed and body holds what was read.
+// A 403 or 429 body is read so a secondary rate limit can be told apart from a missing scope or
+// a plain 429. consumed is true when Body has been closed and body holds what was read.
 func classify(response *http.Response) (retry bool, body []byte, consumed bool, err error) {
 	status := response.StatusCode
-	if status == http.StatusTooManyRequests || (status >= 500 && status <= 599) {
+	if status >= 500 && status <= 599 {
 		return true, nil, false, nil
 	}
-	if status != http.StatusForbidden {
+	if status != http.StatusForbidden && status != http.StatusTooManyRequests {
 		return false, nil, false, nil
 	}
 
 	body, err = readBody(response)
 	if err != nil {
-		return false, body, true, err
+		return status == http.StatusTooManyRequests, body, true, err // a 429 is retried whatever its body held
 	}
-	if retryAfter(response.Header) > 0 {
+	if status == http.StatusTooManyRequests || retryAfter(response.Header) > 0 {
 		return true, body, true, nil
 	}
 	if remaining, _, ok := rateLimit(response.Header); ok && remaining == 0 {
@@ -157,25 +202,29 @@ func classify(response *http.Response) (retry bool, body []byte, consumed bool, 
 	return false, body, true, nil
 }
 
-// retryWait is how long to pause before the next attempt.
-// Retry-After is a number of seconds. X-RateLimit-Reset is the Unix time when a
-// primary window with X-RateLimit-Remaining 0 opens again. Either of those waits
-// is capped at one hour. A 429 or 5xx with neither signal backs off from one second,
-// doubling up to 16 seconds. A secondary limit with neither signal backs off from
-// one minute, doubling up to 16 minutes.
-func retryWait(response *http.Response, body []byte, attempt int) time.Duration {
+// retryWait is how long to pause before the next attempt, and whether every request through the
+// transport pauses with it. Retry-After is a number of seconds. X-RateLimit-Reset is the Unix
+// time when a primary window with X-RateLimit-Remaining 0 opens again. Either of those waits is
+// capped at one hour. A secondary limit with neither signal backs off from one minute, doubling
+// up to 16 minutes. A 429 or 5xx with no signal at all backs off from one second, doubling up to
+// 16 seconds. A Retry-After holds every request. Otherwise a spent primary limit, marked by
+// X-RateLimit-Remaining 0, covers one resource such as search, so it holds only its own request,
+// as does a 5xx; a secondary limit or a 429 holds every request.
+func retryWait(response *http.Response, body []byte, attempt int) (time.Duration, bool) {
 	if delay := retryAfter(response.Header); delay > 0 {
-		return capWait(delay)
+		return capWait(delay), true
 	}
-	if remaining, reset, ok := rateLimit(response.Header); ok && remaining == 0 {
-		if delay := time.Until(reset); delay > 0 {
-			return capWait(delay)
-		}
+	remaining, reset, ok := rateLimit(response.Header)
+	primary := ok && remaining == 0
+	if delay := time.Until(reset); primary && delay > 0 {
+		return capWait(delay), false
 	}
-	if response.StatusCode == http.StatusForbidden && secondaryLimit(body) {
-		return backoff(attempt, secondaryBackoff, maxSecondaryBackoff)
+	secondary := secondaryLimit(body)
+	delay := backoff(attempt, serverBackoff, maxServerBackoff)
+	if secondary {
+		delay = backoff(attempt, secondaryBackoff, maxSecondaryBackoff)
 	}
-	return backoff(attempt, serverBackoff, maxServerBackoff)
+	return delay, !primary && (secondary || response.StatusCode == http.StatusTooManyRequests)
 }
 
 func capWait(delay time.Duration) time.Duration {

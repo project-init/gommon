@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,8 +116,12 @@ func TestRoundTripRetriesAServiceUnavailable(t *testing.T) {
 	if err != nil || user.GetLogin() != "octocat" {
 		t.Fatalf("Users.Get = %v, %v", user, err)
 	}
-	if calls != 2 || len(*slept) != 1 {
-		t.Errorf("calls = %d, waits = %v; want one retry", calls, *slept)
+	// A server error holds only its own request, so the next one goes out at once.
+	if _, _, err := client.Users.Get(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 || !reflect.DeepEqual(*slept, []time.Duration{time.Second}) {
+		t.Errorf("calls = %d, waits = %v; want one retry after 1s and no wait for the next request", calls, *slept)
 	}
 }
 
@@ -422,5 +427,265 @@ func TestRoundTripStopsWhenTheContextEndsDuringTheWait(t *testing.T) {
 	_, _, err = client.Users.Get(ctx, "")
 	if !errors.Is(err, context.Canceled) || errors.Is(err, gerror.ErrTimeout) {
 		t.Errorf("error = %v, want context.Canceled", err)
+	}
+}
+
+// near reports whether got is within a second of want, for waits measured against the clock.
+func near(got, want time.Duration) bool {
+	return got <= want && got > want-time.Second
+}
+
+// GitHub documents no example body for either rate limit, so these are go-github v74's fixtures,
+// verbatim. The primary-limit body's documentation_url points at abuse limits too; only
+// X-RateLimit-Remaining 0 marks it as a spent primary limit.
+const (
+	secondaryLimitBody = `{
+   "message": "You have triggered an abuse detection mechanism and have been temporarily blocked from content creation. Please retry your request again later.",
+   "documentation_url": "https://docs.github.com/en/rest/overview/resources-in-the-rest-api#abuse-rate-limits"
+}`
+	primaryLimitBody = `{
+   "message": "API rate limit exceeded for xxx.xxx.xxx.xxx. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)",
+   "documentation_url": "https://docs.github.com/en/rest/overview/resources-in-the-rest-api#abuse-rate-limits"
+}`
+)
+
+func TestRoundTripHoldsTheNextRequestDuringARateLimit(t *testing.T) {
+	limits := map[string]struct {
+		respond func(http.ResponseWriter)
+		wait    time.Duration
+	}{
+		"429 with Retry-After": {wait: time.Minute, respond: func(w http.ResponseWriter) {
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(http.StatusTooManyRequests)
+		}},
+		"429 alone": {wait: time.Second, respond: func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusTooManyRequests)
+		}},
+		"403 with Retry-After": {wait: time.Minute, respond: func(w http.ResponseWriter) {
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"message":"slow down"}`)
+		}},
+		"403 secondary limit": {wait: time.Minute, respond: func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, secondaryLimitBody)
+		}},
+		"429 secondary limit": {wait: time.Minute, respond: func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, secondaryLimitBody)
+		}},
+		"503 with Retry-After": {wait: time.Minute, respond: func(w http.ResponseWriter) {
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}},
+	}
+	for name, limit := range limits {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			client, slept := newTestClient(t, 0, func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				if calls == 1 {
+					limit.respond(w)
+					return
+				}
+				_, _ = io.WriteString(w, `{"login":"octocat"}`)
+			})
+			for range 2 { // the second stands in for another goroutine's request
+				if _, _, err := client.Users.Get(context.Background(), ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(*slept) != 2 || !near((*slept)[0], limit.wait) || !near((*slept)[1], limit.wait) {
+				t.Errorf("waits = %v, want %s for the limited request and about that for the next", *slept, limit.wait)
+			}
+		})
+	}
+}
+
+func TestRoundTripLetsOthersPassALimitNoRequestWaitsOut(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusTooManyRequests)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	var slept []time.Duration
+	transport := &retryTransport{sleep: func(_ context.Context, d time.Duration) error {
+		slept = append(slept, d)
+		return nil
+	}}
+	once, err := http.NewRequest(http.MethodPost, server.URL, io.NopCloser(strings.NewReader("once")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := transport.RoundTrip(once)
+	if err != nil || response.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("RoundTrip(unreplayable) = %v, %v; want the 429 returned", response, err)
+	}
+	_ = response.Body.Close()
+	next, _ := http.NewRequest(http.MethodGet, server.URL, nil)
+	if response, err = transport.RoundTrip(next); err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if len(slept) != 0 {
+		t.Errorf("waits = %v, want none: the limited request returned without waiting", slept)
+	}
+}
+
+func TestRoundTripLetsOthersPassASpentPrimaryLimit(t *testing.T) {
+	// A spent search quota leaves core requests, which have their own quota, free to go.
+	future := strconv.FormatInt(time.Now().Add(2*time.Minute).Unix(), 10)
+	cases := map[string]struct {
+		status int
+		reset  string
+		body   string
+	}{
+		"403":                {http.StatusForbidden, future, primaryLimitBody},
+		"429":                {http.StatusTooManyRequests, future, primaryLimitBody},
+		"reset already past": {http.StatusForbidden, "7", primaryLimitBody}, // a local clock running ahead
+		"429 past its reset": {http.StatusTooManyRequests, "7", ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			client, slept := newTestClient(t, 0, func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				if calls == 1 {
+					w.Header().Set("X-RateLimit-Remaining", "0")
+					w.Header().Set("X-RateLimit-Resource", "search")
+					w.Header().Set("X-RateLimit-Reset", tc.reset)
+					w.WriteHeader(tc.status)
+					_, _ = io.WriteString(w, tc.body)
+					return
+				}
+				_, _ = io.WriteString(w, `{"login":"octocat"}`)
+			})
+			for range 2 {
+				if _, _, err := client.Users.Get(context.Background(), ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(*slept) != 1 {
+				t.Errorf("waits = %v, want only the limited request's wait", *slept)
+			}
+		})
+	}
+}
+
+// TestRoundTripHoldIsSafeForConcurrentRequests runs the hold from several goroutines. It proves
+// something only under go test -race, which the unit task does not pass; the sequential tests
+// above pin what the hold does.
+func TestRoundTripHoldIsSafeForConcurrentRequests(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		mu.Unlock()
+		if first {
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = io.WriteString(w, `{"login":"octocat"}`)
+	}))
+	t.Cleanup(server.Close)
+	var slept []time.Duration
+	client, err := newClient("token", server.URL, &retryTransport{sleep: func(_ context.Context, d time.Duration) error {
+		mu.Lock()
+		defer mu.Unlock()
+		slept = append(slept, d)
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var group sync.WaitGroup
+	for range 8 {
+		group.Go(func() {
+			if _, _, err := client.Users.Get(context.Background(), ""); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	group.Wait()
+	if calls != 9 {
+		t.Errorf("calls = %d, want every request through after the hold", calls)
+	}
+}
+
+func TestRoundTripKeepsALongerHold(t *testing.T) {
+	calls := 0
+	client, slept := newTestClient(t, 0, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		switch calls {
+		case 1:
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(http.StatusTooManyRequests)
+		case 3:
+			w.Header().Set("Retry-After", "5")
+			w.WriteHeader(http.StatusTooManyRequests)
+		default:
+			_, _ = io.WriteString(w, `{"login":"octocat"}`)
+		}
+	})
+	for range 2 {
+		if _, _, err := client.Users.Get(context.Background(), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(*slept) != 3 || !near((*slept)[2], time.Minute) {
+		t.Errorf("waits = %v, want the 5s limit to wait out the 1m hold still in force", *slept)
+	}
+}
+
+// roundTripFunc serves an attempt from a function.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// brokenBody fails every read, as a connection reset mid-body does.
+type brokenBody struct{}
+
+func (brokenBody) Read([]byte) (int, error) { return 0, errors.New("connection reset by peer") }
+func (brokenBody) Close() error             { return nil }
+
+func TestRoundTripRetriesA429WhoseBodyBreaks(t *testing.T) {
+	calls := 0
+	transport := &retryTransport{
+		sleep: func(context.Context, time.Duration) error { return nil },
+		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				return &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{}, Body: brokenBody{}, Request: req}, nil
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}")), Request: req}, nil
+		}),
+	}
+	req, _ := http.NewRequest(http.MethodGet, "https://api.github.test/user", nil)
+	response, err := transport.RoundTrip(req)
+	if err != nil || response.StatusCode != http.StatusOK || calls != 2 {
+		t.Fatalf("RoundTrip = %v, %v after %d calls; want the 429 retried", response, err, calls)
+	}
+	_ = response.Body.Close()
+}
+
+func TestRoundTripReportsA429BodyItCannotRead(t *testing.T) {
+	transport := &retryTransport{
+		sleep: func(context.Context, time.Duration) error { return nil },
+		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{}, Body: brokenBody{}, Request: req}, nil
+		}),
+	}
+	req, _ := http.NewRequest(http.MethodPost, "https://api.github.test/user", io.NopCloser(strings.NewReader("once")))
+	if response, err := transport.RoundTrip(req); err == nil {
+		_ = response.Body.Close()
+		t.Error("RoundTrip(unreplayable) = nil error, want the failed read reported")
 	}
 }
