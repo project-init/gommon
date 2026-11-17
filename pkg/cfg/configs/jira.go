@@ -44,7 +44,7 @@ import "time"
 type Jira struct {
 	BaseURL  string        `env:"JIRA_BASE_URL" yaml:"baseUrl" safe:"true"`
 	Email    string        `env:"JIRA_EMAIL" yaml:"email" safe:"true"`
-	APIToken string        `env:"JIRA_API_KEY" yaml:"apiKey" safe:"false"`
+	APIKey string        `env:"JIRA_API_KEY" yaml:"apiKey" safe:"false"`
 	PageSize int           `env:"JIRA_PAGE_SIZE" yaml:"pageSize" env-default:"100" safe:"true"`
 	Timeout  time.Duration `env:"JIRA_TIMEOUT" yaml:"timeout" env-default:"30s" safe:"true"`
 }
