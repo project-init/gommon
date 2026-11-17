@@ -110,6 +110,57 @@ func TestMissingBucketIsNotNotFound(t *testing.T) {
 	require.ErrorContains(t, err, "put object "+key)
 }
 
+func TestHeadReturnsMetadataWithoutBody(t *testing.T) {
+	client, ctx := localClient(t)
+
+	key := "head/" + uuid.NewString()
+	body := []byte(`{"id":"SAL-1"}`)
+	require.NoError(t, client.Put(ctx, key, bytes.NewReader(body), "application/json"))
+
+	head, err := client.Head(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, "application/json", head.ContentType)
+	assert.Equal(t, int64(len(body)), head.Size)
+	assert.False(t, head.LastModified.IsZero())
+
+	_, err = client.Head(ctx, "head/does-not-exist-"+uuid.NewString())
+	require.ErrorIs(t, err, gerror.ErrNotFound)
+}
+
+func TestPutMetadataRoundTrip(t *testing.T) {
+	client, ctx := localClient(t)
+
+	key := "metadata/" + uuid.NewString()
+	updated := "2026-11-17T14:30:00Z"
+	err := client.Put(ctx, key, bytes.NewReader([]byte(`{}`)), "application/json",
+		WithMetadata(map[string]string{"Jira-Updated": updated}))
+	require.NoError(t, err)
+
+	head, err := client.Head(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"jira-updated": updated}, head.Metadata)
+
+	got, err := client.Get(ctx, key)
+	require.NoError(t, err)
+	require.NoError(t, got.Body.Close())
+	assert.Equal(t, map[string]string{"jira-updated": updated}, got.Metadata)
+
+	// A second Put without metadata replaces the object and drops the old metadata.
+	require.NoError(t, client.Put(ctx, key, bytes.NewReader([]byte(`{}`)), "application/json"))
+	head, err = client.Head(ctx, key)
+	require.NoError(t, err)
+	assert.Empty(t, head.Metadata)
+}
+
+func TestCheckBucketTellsMissingBucketFromMissingKey(t *testing.T) {
+	client, ctx := localClient(t)
+	require.NoError(t, client.CheckBucket(ctx))
+
+	missing, err := New("gommon-s3-missing-"+uuid.NewString(), 5*time.Second, 1)
+	require.NoError(t, err)
+	require.ErrorIs(t, missing.CheckBucket(ctx), gerror.ErrNotFound)
+}
+
 func localClient(t *testing.T) (*Client, context.Context) {
 	t.Helper()
 

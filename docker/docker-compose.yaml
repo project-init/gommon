@@ -18,6 +18,8 @@ services:
           curl -fsS http://localhost:4566/_localstack/health >/dev/null &&
           awslocal sqs get-queue-url --region us-east-1
           --queue-name gommon-events-dev >/dev/null &&
+          awslocal sqs get-queue-url --region us-east-1
+          --queue-name gommon-sqs-dev >/dev/null &&
           awslocal events describe-event-bus --region us-east-1
           --name gommon-events-dev >/dev/null
       interval: 2s

@@ -8,6 +8,7 @@ event_bus_name=gommon-events-dev
 queue_name=gommon-events-dev
 rule_name=gommon-events-dev-rule
 bucket_name=gommon-s3-dev
+sender_queue_name=gommon-sqs-dev
 
 awslocal events create-event-bus \
   --region "$region" \
@@ -40,6 +41,10 @@ awslocal events put-targets \
   --rule "$rule_name" \
   --targets "[{\"Id\":\"sqs-target\",\"Arn\":\"$queue_arn\"}]"
 
+awslocal sqs create-queue \
+  --region "$region" \
+  --queue-name "$sender_queue_name"
+
 awslocal s3 mb \
   --region "$region" \
   "s3://${bucket_name}"
@@ -50,6 +55,9 @@ awslocal events describe-event-bus \
 awslocal sqs get-queue-url \
   --region "$region" \
   --queue-name "$queue_name" >/dev/null
+awslocal sqs get-queue-url \
+  --region "$region" \
+  --queue-name "$sender_queue_name" >/dev/null
 awslocal s3api head-bucket \
   --region "$region" \
   --bucket "$bucket_name"

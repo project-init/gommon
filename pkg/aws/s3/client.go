@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -38,11 +39,40 @@ type ListResult struct {
 
 // GetResult is the body and metadata for one key. The caller closes Body.
 // The Get deadline stays in effect until Body is closed.
+// Metadata holds the user metadata set on the object, keyed without the x-amz-meta- prefix.
 type GetResult struct {
 	Body         io.ReadCloser
 	ContentType  string
 	Size         int64
 	LastModified time.Time
+	Metadata     map[string]string
+}
+
+// PutOption sets an optional field on a Put.
+type PutOption func(*sdks3.PutObjectInput)
+
+// WithMetadata stores metadata as the object's user metadata, served back as x-amz-meta-<key>
+// headers and returned by Get and Head. S3 lowercases the keys. It replaces any metadata the object
+// had before, as Put replaces the whole object.
+func WithMetadata(metadata map[string]string) PutOption {
+	return func(input *sdks3.PutObjectInput) {
+		if len(metadata) == 0 {
+			return
+		}
+		input.Metadata = make(map[string]string, len(metadata))
+		for key, value := range metadata {
+			input.Metadata[key] = value
+		}
+	}
+}
+
+// HeadResult is the metadata for one key, read without its body.
+// Metadata holds the user metadata set on the object, keyed without the x-amz-meta- prefix.
+type HeadResult struct {
+	ContentType  string
+	Size         int64
+	LastModified time.Time
+	Metadata     map[string]string
 }
 
 // cancelOnClose cancels the Get deadline after the caller finishes the body.
@@ -61,6 +91,8 @@ type s3API interface {
 	GetObject(ctx context.Context, params *sdks3.GetObjectInput, optFns ...func(*sdks3.Options)) (*sdks3.GetObjectOutput, error)
 	PutObject(ctx context.Context, params *sdks3.PutObjectInput, optFns ...func(*sdks3.Options)) (*sdks3.PutObjectOutput, error)
 	ListObjectsV2(ctx context.Context, params *sdks3.ListObjectsV2Input, optFns ...func(*sdks3.Options)) (*sdks3.ListObjectsV2Output, error)
+	HeadObject(ctx context.Context, params *sdks3.HeadObjectInput, optFns ...func(*sdks3.Options)) (*sdks3.HeadObjectOutput, error)
+	HeadBucket(ctx context.Context, params *sdks3.HeadBucketInput, optFns ...func(*sdks3.Options)) (*sdks3.HeadBucketOutput, error)
 }
 
 // Client reads and writes objects in one bucket.
@@ -163,7 +195,68 @@ func (c *Client) Get(ctx context.Context, key string) (*GetResult, error) {
 		ContentType:  aws.ToString(output.ContentType),
 		Size:         aws.ToInt64(output.ContentLength),
 		LastModified: aws.ToTime(output.LastModified),
+		Metadata:     output.Metadata,
 	}, nil
+}
+
+// Head returns the metadata for key without downloading its body. A missing key wraps ErrNotFound.
+//
+// S3 answers 404 for a missing bucket as well as a missing key, so a missing bucket also wraps
+// ErrNotFound here. Call CheckBucket first when the two must be told apart.
+func (c *Client) Head(ctx context.Context, key string) (*HeadResult, error) {
+	if key == "" {
+		return nil, fmt.Errorf("%w: key is required", gerror.ErrBadRequest)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	output, err := c.api.HeadObject(ctx, &sdks3.HeadObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		if isNotFound(err) {
+			return nil, fmt.Errorf("%w: head object %s", gerror.ErrNotFound, key)
+		}
+		return nil, fmt.Errorf("%w: head object %s", err, key)
+	}
+	if output == nil {
+		return nil, fmt.Errorf("head object %s: empty response", key)
+	}
+
+	return &HeadResult{
+		ContentType:  aws.ToString(output.ContentType),
+		Size:         aws.ToInt64(output.ContentLength),
+		LastModified: aws.ToTime(output.LastModified),
+		Metadata:     output.Metadata,
+	}, nil
+}
+
+// CheckBucket confirms the bucket exists and the caller can reach it. A missing bucket wraps
+// ErrNotFound.
+func (c *Client) CheckBucket(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	if _, err := c.api.HeadBucket(ctx, &sdks3.HeadBucketInput{Bucket: aws.String(c.bucket)}); err != nil {
+		if isNotFound(err) {
+			return fmt.Errorf("%w: head bucket %s", gerror.ErrNotFound, c.bucket)
+		}
+		return fmt.Errorf("%w: head bucket %s", err, c.bucket)
+	}
+	return nil
+}
+
+// isNotFound reports a 404. HEAD responses carry no body, so the SDK cannot always build a typed
+// NotFound error and the status code is the fallback.
+func isNotFound(err error) bool {
+	var notFound *s3types.NotFound
+	if errors.As(err, &notFound) {
+		return true
+	}
+	var status interface{ HTTPStatusCode() int }
+	return errors.As(err, &status) && status.HTTPStatusCode() == http.StatusNotFound
 }
 
 func releaseGet(cancel context.CancelFunc, output *sdks3.GetObjectOutput) {
@@ -174,7 +267,8 @@ func releaseGet(cancel context.CancelFunc, output *sdks3.GetObjectOutput) {
 }
 
 // Put writes body to key, replacing any existing object. A seekable body lets the SDK set the content length.
-func (c *Client) Put(ctx context.Context, key string, body io.Reader, contentType string) error {
+// Pass WithMetadata to store user metadata alongside the object.
+func (c *Client) Put(ctx context.Context, key string, body io.Reader, contentType string, opts ...PutOption) error {
 	if key == "" {
 		return fmt.Errorf("%w: key is required", gerror.ErrBadRequest)
 	}
@@ -189,6 +283,11 @@ func (c *Client) Put(ctx context.Context, key string, body io.Reader, contentTyp
 	}
 	if contentType != "" {
 		input.ContentType = aws.String(contentType)
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(input)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
