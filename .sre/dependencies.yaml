@@ -10,4 +10,4 @@ dependencies:
   mise:
     policies:
       # golangci-lint majors change its config format, so they move by hand.
-      golangci-lint: minor
+      github:golangci/golangci-lint: minor
