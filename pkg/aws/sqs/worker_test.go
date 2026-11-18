@@ -92,6 +92,20 @@ func (f *fakeSQS) DeleteMessageBatch(
 	return output, err
 }
 
+// ChangeMessageVisibilityBatch reports every entry as extended.
+func (f *fakeSQS) ChangeMessageVisibilityBatch(
+	ctx context.Context, in *sqs.ChangeMessageVisibilityBatchInput, _ ...func(*sqs.Options),
+) (*sqs.ChangeMessageVisibilityBatchOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out := &sqs.ChangeMessageVisibilityBatchOutput{}
+	for _, e := range in.Entries {
+		out.Successful = append(out.Successful, types.ChangeMessageVisibilityBatchResultEntry{Id: e.Id})
+	}
+	return out, nil
+}
+
 func (f *fakeSQS) setDeleteResult(output *sqs.DeleteMessageBatchOutput, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -120,11 +134,10 @@ func (f *fakeSQS) getDeleteCalls() []*sqs.DeleteMessageBatchInput {
 	return cp
 }
 
-func TestWorker_PollSetsVisibilityTimeout_WhenConfigured(t *testing.T) {
+func TestWorker_PollSetsVisibilityTimeoutToHeartbeatExtension(t *testing.T) {
 	t.Parallel()
 
 	fc := newFakeSQS(t)
-	vt := int32(42)
 
 	w, err := New(
 		func(ctx context.Context, batch []Message) {},
@@ -133,16 +146,12 @@ func TestWorker_PollSetsVisibilityTimeout_WhenConfigured(t *testing.T) {
 		WithWorkerCount(1),
 		WithBatchSize(3),
 		WithWaitTimeSeconds(5),
-		WithVisibilityTimeoutSeconds(vt),
+		WithHeartbeat(20*time.Second, time.Minute),
 		WithDeleteBatchSize(10),
 		WithDeleteBatchWindow(50*time.Millisecond),
 	)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Observe ReceiveMessage being called, then cancel to stop the poll loop.
 	receivedCall := make(chan struct{}, 1)
 	fc.onReceive = func(_ *sqs.ReceiveMessageInput) {
 		select {
@@ -151,36 +160,26 @@ func TestWorker_PollSetsVisibilityTimeout_WhenConfigured(t *testing.T) {
 		}
 	}
 
-	pollDone := make(chan error, 1)
-	out := make(chan []types.Message, 1)
-
-	go func() {
-		pollDone <- w.poll(ctx, out)
-	}()
-
-	// Allow poll to return from its first ReceiveMessage call.
-	fc.enqueueReceive(&sqs.ReceiveMessageOutput{Messages: []types.Message{}}, nil)
+	cancel, done := startWorker(t, w)
 
 	select {
 	case <-receivedCall:
-		// Now we know the ReceiveMessageInput was constructed and passed to the client.
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for ReceiveMessage to be called")
 	}
 
 	cancel()
-
-	require.ErrorIs(t, <-pollDone, context.Canceled)
+	waitDone(t, done)
 
 	calls := fc.getReceiveCalls()
 	require.GreaterOrEqual(t, len(calls), 1)
 
-	last := calls[len(calls)-1]
-	require.NotNil(t, last.VisibilityTimeout)
-	assert.Equal(t, vt, last.VisibilityTimeout)
-	assert.Equal(t, int32(5), last.WaitTimeSeconds)
-	assert.Equal(t, int32(3), last.MaxNumberOfMessages)
-	assert.Equal(t, "https://example.com/queue", aws.ToString(last.QueueUrl))
+	first := calls[0]
+	assert.Equal(t, int32(60), first.VisibilityTimeout)
+	assert.Equal(t, int32(5), first.WaitTimeSeconds)
+	// One idle handler with a batch of 3 plus the default 10 prefetched is 13, capped at the ReceiveMessage limit.
+	assert.Equal(t, int32(10), first.MaxNumberOfMessages)
+	assert.Equal(t, "https://example.com/queue", aws.ToString(first.QueueUrl))
 }
 
 func TestWorker_RunWorker_MarkEnqueuesDeletes_AndDeleterFlushesBySize(t *testing.T) {
@@ -191,7 +190,7 @@ func TestWorker_RunWorker_MarkEnqueuesDeletes_AndDeleterFlushesBySize(t *testing
 	var deletedMu sync.Mutex
 	var deleted []types.DeleteMessageBatchRequestEntry
 
-	flushDone := make(chan struct{}, 1)
+	flushDone := make(chan struct{}, 10)
 	fc.onDelete = func(in *sqs.DeleteMessageBatchInput) {
 		deletedMu.Lock()
 		deleted = append(deleted, in.Entries...)
@@ -199,43 +198,30 @@ func TestWorker_RunWorker_MarkEnqueuesDeletes_AndDeleterFlushesBySize(t *testing
 		flushDone <- struct{}{}
 	}
 
-	w := &Worker{
-		client:   fc,
-		queueURL: "https://example.com/queue",
-		handler: func(ctx context.Context, batch []Message) {
+	w, err := New(
+		func(ctx context.Context, batch []Message) {
 			for _, m := range batch {
 				m.Mark()
 			}
 		},
-		workerCount:         1,
-		batchSize:           10,
-		waitTimeSeconds:     0,
-		maxReceiveBatchSize: 10,
+		WithQueueURL("https://example.com/queue"),
+		WithSQSClient(fc),
+		WithWorkerCount(1),
+		WithBatchSize(10),
+		WithWaitTimeSeconds(0),
+		WithDeleteBatchSize(2),                // flush by size
+		WithDeleteBatchWindow(10*time.Second), // avoid time-based flush
+	)
+	require.NoError(t, err)
 
-		deleteBatchSize:   2,                // flush by size
-		deleteBatchWindow: 10 * time.Second, // avoid time-based flush
-		deleteChan:        make(chan deleteEntry, 100),
-		jobs:              make(chan []types.Message, 1),
-	}
-
-	// Start deleter
-	var deleterWG sync.WaitGroup
-	deleterWG.Go(func() {
-		w.runBatchDeleter(t.Context(), w.deleteChan)
-	})
-
-	// Start worker
-	var workerWG sync.WaitGroup
-	workerWG.Go(func() {
-		w.runWorker(t.Context(), w.jobs)
-	})
-
-	// Send 3 messages: deletions should flush as 2 + 1 (final flush happens on channel close)
-	w.jobs <- []types.Message{
+	// Send 3 messages: deletions should flush as 2 + 1 (final flush happens on shutdown)
+	fc.enqueueReceive(&sqs.ReceiveMessageOutput{Messages: []types.Message{
 		{MessageId: aws.String("m1"), ReceiptHandle: aws.String("r1")},
 		{MessageId: aws.String("m2"), ReceiptHandle: aws.String("r2")},
 		{MessageId: aws.String("m3"), ReceiptHandle: aws.String("r3")},
-	}
+	}}, nil)
+
+	cancel, done := startWorker(t, w)
 
 	// Wait for first flush (size-based).
 	select {
@@ -244,13 +230,9 @@ func TestWorker_RunWorker_MarkEnqueuesDeletes_AndDeleterFlushesBySize(t *testing
 		assert.Fail(t, "timed out waiting for first delete flush")
 	}
 
-	// Stop worker and close delete channel to force final flush.
-	close(w.jobs)
-	workerWG.Wait()
-	close(w.deleteChan)
-
-	// Wait for deleter to finish (it will flush remaining buffer on close).
-	deleterWG.Wait()
+	// Stop the worker to force the final flush.
+	cancel()
+	waitDone(t, done)
 
 	// We expect 3 total entries deleted; dedupe shouldn't drop unique receipt handles.
 	deletedMu.Lock()
@@ -269,44 +251,40 @@ func TestWorker_RunWorker_MarkBestEffort_NoIDOrReceiptHandle(t *testing.T) {
 	t.Parallel()
 
 	fc := newFakeSQS(t)
+	handled := make(chan struct{})
 
-	w := &Worker{
-		client:            fc,
-		queueURL:          "https://example.com/queue",
-		deleteBatchSize:   1,
-		deleteBatchWindow: 10 * time.Second,
-		deleteChan:        make(chan deleteEntry, 10),
-		jobs:              make(chan []types.Message, 1),
-		handler: func(ctx context.Context, batch []Message) {
+	w, err := New(
+		func(ctx context.Context, batch []Message) {
 			for _, m := range batch {
 				// These should be no-ops and not enqueue anything.
 				m.Mark()
 			}
+			close(handled)
 		},
+		WithQueueURL("https://example.com/queue"),
+		WithSQSClient(fc),
+		WithBatchSize(3),
+		WithDeleteBatchSize(1),
+		WithDeleteBatchWindow(10*time.Second),
+	)
+	require.NoError(t, err)
+
+	fc.enqueueReceive(&sqs.ReceiveMessageOutput{Messages: []types.Message{
+		{ReceiptHandle: aws.String("r1")}, // missing MessageId
+		{MessageId: aws.String("m2")},     // missing receipt
+		{},                                // both missing
+	}}, nil)
+
+	cancel, done := startWorker(t, w)
+
+	select {
+	case <-handled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler")
 	}
 
-	// Start deleter and worker
-	var deleterWG sync.WaitGroup
-	deleterWG.Go(func() {
-		w.runBatchDeleter(t.Context(), w.deleteChan)
-	})
-
-	var workerWG sync.WaitGroup
-	workerWG.Go(func() {
-		w.runWorker(t.Context(), w.jobs)
-	})
-
-	// Missing MessageId
-	w.jobs <- []types.Message{
-		{ReceiptHandle: aws.String("r1")},
-		{MessageId: aws.String("m2")}, // missing receipt
-		{},                            // both missing
-	}
-
-	close(w.jobs)
-	workerWG.Wait()
-	close(w.deleteChan)
-	deleterWG.Wait()
+	cancel()
+	waitDone(t, done)
 
 	// No deletes should have been issued.
 	assert.Len(t, fc.getDeleteCalls(), 0)
@@ -654,17 +632,15 @@ func TestWorker_Poll_ReturnsWrappedError_OnReceiveError(t *testing.T) {
 	fc := newFakeSQS(t)
 	fc.enqueueReceive(nil, errors.New("boom"))
 
-	w := &Worker{
-		client:              fc,
-		queueURL:            "https://example.com/queue",
-		waitTimeSeconds:     0,
-		maxReceiveBatchSize: 1,
-	}
+	w, err := New(
+		func(ctx context.Context, batch []Message) {},
+		WithQueueURL("https://example.com/queue"),
+		WithSQSClient(fc),
+		WithWaitTimeSeconds(0),
+	)
+	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	err := w.poll(ctx, make(chan []types.Message, 1))
+	err = w.Start(t.Context())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sqs worker: receive message:")
 }

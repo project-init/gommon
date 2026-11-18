@@ -15,10 +15,10 @@ import (
 	gaws "github.com/project-init/gommon/pkg/aws"
 )
 
-// HandlerFunc is invoked for each received batch.
+// HandlerFunc is invoked for each batch of up to BatchSize messages.
 //
-// The handler should handle errors internally. Messages are only deleted if
-// your handler calls `Message.Mark()` on them.
+// The handler decides whether each message is done: Mark deletes it, and a message not marked is redelivered
+// once its visibility timeout ends. Mark before returning; once the handler returns, Mark does nothing.
 type HandlerFunc func(ctx context.Context, batch []Message)
 
 type deleteEntry struct {
@@ -29,7 +29,24 @@ type deleteEntry struct {
 type sqsClient interface {
 	ReceiveMessage(ctx context.Context, params *sqs.ReceiveMessageInput, optFns ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error)
 	DeleteMessageBatch(ctx context.Context, params *sqs.DeleteMessageBatchInput, optFns ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
+	ChangeMessageVisibilityBatch(ctx context.Context, params *sqs.ChangeMessageVisibilityBatchInput, optFns ...func(*sqs.Options)) (*sqs.ChangeMessageVisibilityBatchOutput, error)
 }
+
+var (
+	// ErrVisibilityLost is the cause of a handler's context cancellation when the worker could not keep one of
+	// the batch's messages hidden. Another worker may already have received the message, so the handler
+	// should stop without writing anything. Mark is a no-op for a lost message. This also happens to a job
+	// still running 12 hours after its message was received, the most SQS keeps a message hidden.
+	ErrVisibilityLost = errors.New("sqs worker: message visibility lost")
+)
+
+const (
+	// maxReceiveMessages is the most messages one ReceiveMessage call returns.
+	maxReceiveMessages = 10
+
+	// deleteCallTimeout bounds each DeleteMessageBatch call.
+	deleteCallTimeout = 3 * time.Second
+)
 
 type Worker struct {
 	client sqsClient
@@ -39,21 +56,27 @@ type Worker struct {
 
 	handler HandlerFunc
 
-	workerCount int
-	batchSize   int
+	workerCount   int
+	batchSize     int
+	maxPrefetched int
 
 	// ReceiveMessage tuning
-	waitTimeSeconds          int32
-	visibilityTimeoutSeconds *int32
-	maxReceiveBatchSize      int32 // sent to ReceiveMessage (<= 10)
+	waitTimeSeconds int32
+
+	// Heartbeat
+	heartbeatInterval  time.Duration
+	heartbeatExtension time.Duration
 
 	// Delete batching
 	deleteBatchSize   int
 	deleteBatchWindow time.Duration
 	deleteChan        chan deleteEntry
 
-	// Internal worker scheduling
-	jobs chan []types.Message
+	// deleteMu guards deleteChan, so a late Mark cannot send on a closed channel.
+	deleteMu      sync.RWMutex
+	deletesClosed bool
+
+	queue *messageQueue
 }
 
 // New constructs a Worker using DefaultOptions(), applies any variadic options, then validates.
@@ -84,12 +107,14 @@ func New(handler HandlerFunc, optFns ...Option) (*Worker, error) {
 		logger:   opts.Logger,
 		queueURL: opts.QueueURL,
 
-		workerCount: opts.WorkerCount,
-		batchSize:   opts.BatchSize,
+		workerCount:   opts.WorkerCount,
+		batchSize:     opts.BatchSize,
+		maxPrefetched: opts.MaxPrefetched,
 
-		waitTimeSeconds:          opts.WaitTimeSeconds,
-		visibilityTimeoutSeconds: opts.VisibilityTimeoutSeconds,
-		maxReceiveBatchSize:      int32(opts.BatchSize),
+		waitTimeSeconds: opts.WaitTimeSeconds,
+
+		heartbeatInterval:  opts.HeartbeatInterval,
+		heartbeatExtension: opts.HeartbeatExtension,
 
 		deleteBatchSize:   opts.DeleteBatchSize,
 		deleteBatchWindow: opts.DeleteBatchWindow,
@@ -106,117 +131,151 @@ func New(handler HandlerFunc, optFns ...Option) (*Worker, error) {
 	return w, nil
 }
 
-// Start runs the poller, workers, and background deleter until ctx is cancelled.
+// Start runs the poller, handlers, heartbeat, and background deleter until ctx is cancelled.
 // It returns when shutdown is complete. Any poll error is returned.
+//
+// The poller receives only as many messages as the worker can hold: a full batch for every idle handler,
+// plus up to MaxPrefetched waiting for a busy one. A free handler takes up to BatchSize of the oldest
+// waiting messages at once.
+//
+// On shutdown, waiting messages are not started; the worker stops holding them, and they reappear when
+// their visibility ends. Running handlers see ctx cancelled, and Start waits for them, keeping their
+// messages hidden.
 func (w *Worker) Start(ctx context.Context) error {
-	w.jobs = make(chan []types.Message, w.workerCount*2)
+	w.queue = newMessageQueue(w.workerCount, w.batchSize, w.maxPrefetched)
 	w.deleteChan = make(chan deleteEntry, 1000)
 
-	var allWG sync.WaitGroup
-	var workersWG sync.WaitGroup
+	var deleterWG, handlersWG, heartbeatWG sync.WaitGroup
 
-	// Start background batch deleter
-	allWG.Go(func() {
+	deleterWG.Go(func() {
 		w.runBatchDeleter(ctx, w.deleteChan)
 	})
 
-	// Start workers
+	// The heartbeat outlives ctx: running handlers keep their messages hidden until they return.
+	stopHeartbeat := make(chan struct{})
+	heartbeatWG.Go(func() {
+		w.runHeartbeat(context.WithoutCancel(ctx), stopHeartbeat)
+	})
+
 	for range w.workerCount {
-		allWG.Add(1)
-		workersWG.Add(1)
-		go func() {
-			defer allWG.Done()
-			defer workersWG.Done()
-			w.runWorker(ctx, w.jobs)
-		}()
+		handlersWG.Go(func() {
+			w.runHandler(ctx)
+		})
 	}
 
-	// Run poller (blocks)
-	pollErr := w.poll(ctx, w.jobs)
+	pollErr := w.poll(ctx)
 
-	// Shutdown sequence:
-	// 1) Stop dispatching new jobs and wait for workers to exit.
-	//    Workers may still call Message.Mark(), so we must not close deleteChan until they are done.
-	close(w.jobs)
-	workersWG.Wait()
+	// Shutdown: on cancellation, stop holding waiting messages now, so the heartbeat no longer extends them.
+	// After a receive error, handlers take what is already waiting.
+	w.queue.stop(ctx.Err() != nil)
+	handlersWG.Wait()
 
-	// 2) Close deleteChan to signal the deleter to flush any buffered deletes and exit.
-	close(w.deleteChan)
-	allWG.Wait()
+	// Handlers stop taking messages once ctx is cancelled, which can leave some waiting after a receive error.
+	w.queue.stop(true)
 
-	// Treat context cancellation/deadline as graceful shutdown.
+	close(stopHeartbeat)
+	heartbeatWG.Wait()
+
+	w.closeDeletes()
+	deleterWG.Wait()
+
 	if errors.Is(pollErr, context.Canceled) || errors.Is(pollErr, context.DeadlineExceeded) {
 		return nil
 	}
-
 	return pollErr
 }
 
-func (w *Worker) runWorker(ctx context.Context, jobs <-chan []types.Message) {
-	for rawBatch := range jobs {
-		if len(rawBatch) == 0 {
-			continue
-		}
+// poll receives as many messages as the queue has room for, up to the ReceiveMessage limit.
+func (w *Worker) poll(ctx context.Context) error {
+	visibility := int32(w.heartbeatExtension / time.Second)
 
-		// Wrap raw messages so handler can call Mark() directly.
-		batch := make([]Message, 0, len(rawBatch))
-		for i := range rawBatch {
-			msg := rawBatch[i]
-			batch = append(batch, Message{
-				raw: msg,
-				mark: func(m types.Message) {
-					// Only enqueue if it has the fields needed for DeleteMessageBatch.
-					if m.MessageId == nil || m.ReceiptHandle == nil {
-						return
-					}
-					w.deleteChan <- deleteEntry{
-						id:            *m.MessageId,
-						receiptHandle: *m.ReceiptHandle,
-					}
-				},
-			})
-		}
-
-		w.handler(ctx, batch)
-	}
-}
-
-func (w *Worker) poll(ctx context.Context, out chan<- []types.Message) error {
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+		n, err := w.queue.reserve(ctx, maxReceiveMessages)
+		if err != nil {
+			return err
 		}
 
 		in := &sqs.ReceiveMessageInput{
 			QueueUrl:            aws.String(w.queueURL),
-			MaxNumberOfMessages: w.maxReceiveBatchSize,
+			MaxNumberOfMessages: int32(n),
 			WaitTimeSeconds:     w.waitTimeSeconds,
-		}
-		if w.visibilityTimeoutSeconds != nil {
-			in.VisibilityTimeout = *w.visibilityTimeoutSeconds
+			VisibilityTimeout:   visibility,
 		}
 
+		// Measured before the call, so the visibility deadline errs early.
+		sentAt := time.Now()
 		resp, err := w.client.ReceiveMessage(ctx, in)
 		if err != nil {
-			// If context cancelled, bubble it; else return error to allow caller to restart/backoff.
+			w.queue.add(n, nil, time.Time{})
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			return fmt.Errorf("sqs worker: receive message: %w", err)
 		}
-		if len(resp.Messages) == 0 {
-			continue
+
+		var msgs []types.Message
+		if resp != nil {
+			msgs = resp.Messages
 		}
 
-		// Send the received batch as a single unit of work.
-		select {
-		case out <- resp.Messages:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		w.queue.add(n, msgs, sentAt.Add(w.heartbeatExtension))
 	}
+}
+
+func (w *Worker) runHandler(ctx context.Context) {
+	for {
+		batchCtx, cancel, batch, ok := w.queue.take(ctx)
+		if !ok {
+			return
+		}
+
+		msgs := make([]Message, len(batch))
+		for i, h := range batch {
+			msgs[i] = w.message(h)
+		}
+		w.handler(batchCtx, msgs)
+
+		// Messages the handler left unsettled stop being extended and reappear when their visibility ends.
+		for _, h := range batch {
+			w.queue.settle(h)
+		}
+		cancel(nil)
+		w.queue.done()
+	}
+}
+
+func (w *Worker) message(h *heldMessage) Message {
+	return Message{
+		raw: h.raw,
+		mark: func(m types.Message) {
+			if _, _, ok := w.queue.settle(h); !ok {
+				return
+			}
+			if m.MessageId == nil || m.ReceiptHandle == nil {
+				return
+			}
+			w.enqueueDelete(deleteEntry{id: *m.MessageId, receiptHandle: *m.ReceiptHandle})
+		},
+	}
+}
+
+// enqueueDelete sends a delete to the batch deleter, unless it has already shut down.
+func (w *Worker) enqueueDelete(e deleteEntry) {
+	w.deleteMu.RLock()
+	defer w.deleteMu.RUnlock()
+
+	if w.deletesClosed {
+		return
+	}
+	w.deleteChan <- e
+}
+
+func (w *Worker) closeDeletes() {
+	w.deleteMu.Lock()
+	defer w.deleteMu.Unlock()
+
+	w.deletesClosed = true
+	close(w.deleteChan)
 }
 
 func (w *Worker) runBatchDeleter(ctx context.Context, in <-chan deleteEntry) {
@@ -270,7 +329,7 @@ func (w *Worker) runBatchDeleter(ctx context.Context, in <-chan deleteEntry) {
 	}
 
 	flushWithTimeout := func() {
-		flushCtx, cancel := context.WithTimeout(deleteCtx, 3*time.Second)
+		flushCtx, cancel := context.WithTimeout(deleteCtx, deleteCallTimeout)
 		defer cancel()
 		flush(flushCtx)
 	}

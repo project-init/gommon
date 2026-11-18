@@ -21,37 +21,55 @@ type Options struct {
 	WorkerCount int
 
 	// Batching
-	// BatchSize controls how many messages are passed to your handler per job.
-	// Note: SQS ReceiveMessage MaxNumberOfMessages is <= 10, and the worker currently
-	// maps receive batch == handler batch, so BatchSize must be 1..10.
+	// BatchSize is the most messages passed to your handler at once (1..10). A free handler takes up to
+	// BatchSize of the oldest waiting messages and does not wait for a full batch.
 	BatchSize int
 
 	// ReceiveMessage tuning
 	// WaitTimeSeconds controls SQS long-polling (0..20).
 	WaitTimeSeconds int32
 
-	// VisibilityTimeoutSeconds overrides the per-receive visibility timeout.
-	// If nil, the queue default visibility timeout applies.
-	VisibilityTimeoutSeconds *int32
-
 	// Delete batching
 	// DeleteBatchSize controls max entries per DeleteMessageBatch call (1..10).
 	DeleteBatchSize int
 	// DeleteBatchWindow controls periodic flushing even if the delete batch isn't full.
 	DeleteBatchWindow time.Duration
+
+	// MaxPrefetched is the most received messages that may wait in memory for a busy handler. The worker
+	// receives only as many messages as it can hold: a full batch for every idle handler plus up to
+	// MaxPrefetched waiting. The default is 10. Use 0 for long jobs, so the worker receives only for idle
+	// handlers and waiting messages stay in the queue for other workers.
+	MaxPrefetched int
+
+	// HeartbeatInterval and HeartbeatExtension control how the worker keeps the messages it holds hidden.
+	// Each receive hides messages for HeartbeatExtension, and every HeartbeatInterval the worker resets
+	// every held message, waiting or running, to stay hidden for HeartbeatExtension from then. The
+	// defaults are 3 and 6 minutes: longer values make fewer SQS calls, but a crashed worker's messages
+	// take longer to reappear. A message whose visibility cannot be kept is dropped: a waiting message
+	// never reaches the handler, and a running message's handler context is cancelled with ErrVisibilityLost.
+	//
+	// HeartbeatExtension must be whole seconds. SQS keeps a message hidden for at most 12 hours after it
+	// was received; after that it rejects extensions, so a job still running then loses its message.
+	HeartbeatInterval  time.Duration
+	HeartbeatExtension time.Duration
 }
+
+// maxVisibilityTimeout is the largest visibility timeout SQS accepts.
+const maxVisibilityTimeout = 12 * time.Hour
 
 // DefaultOptions returns a fully-populated Options struct with sane defaults.
 // QueueURL is still required and must be set via WithQueueURL (or directly) before validation.
 func DefaultOptions() Options {
 	return Options{
-		WorkerCount:              1,
-		BatchSize:                10,
-		WaitTimeSeconds:          20,
-		VisibilityTimeoutSeconds: nil,
-		DeleteBatchSize:          10,
-		DeleteBatchWindow:        10 * time.Second,
-		Logger:                   slog.Default(),
+		WorkerCount:        1,
+		BatchSize:          10,
+		MaxPrefetched:      10,
+		WaitTimeSeconds:    20,
+		HeartbeatInterval:  3 * time.Minute,
+		HeartbeatExtension: 6 * time.Minute,
+		DeleteBatchSize:    10,
+		DeleteBatchWindow:  10 * time.Second,
+		Logger:             slog.Default(),
 	}
 }
 
@@ -69,14 +87,28 @@ func (o Options) Validate() error {
 	if o.WaitTimeSeconds < 0 || o.WaitTimeSeconds > 20 {
 		return fmt.Errorf("sqs worker: options.WaitTimeSeconds must be 0..20 (got %d)", o.WaitTimeSeconds)
 	}
-	if o.VisibilityTimeoutSeconds != nil && *o.VisibilityTimeoutSeconds < 0 {
-		return fmt.Errorf("sqs worker: options.VisibilityTimeoutSeconds must be >= 0 (got %d)", *o.VisibilityTimeoutSeconds)
-	}
 	if o.DeleteBatchSize <= 0 || o.DeleteBatchSize > 10 {
 		return fmt.Errorf("sqs worker: options.DeleteBatchSize must be > 0 and <= 10 (got %d)", o.DeleteBatchSize)
 	}
 	if o.DeleteBatchWindow <= 0 || o.DeleteBatchWindow > 2*time.Minute {
 		return fmt.Errorf("sqs worker: options.DeleteBatchWindow must be > 0 and <= 2m (got %s)", o.DeleteBatchWindow)
+	}
+	if o.MaxPrefetched < 0 {
+		return fmt.Errorf("sqs worker: options.MaxPrefetched must be >= 0 (got %d)", o.MaxPrefetched)
+	}
+	if o.HeartbeatInterval <= 0 || o.HeartbeatInterval >= o.HeartbeatExtension {
+		return fmt.Errorf("sqs worker: options.HeartbeatInterval must be > 0 and < HeartbeatExtension (got %s and %s)", o.HeartbeatInterval, o.HeartbeatExtension)
+	}
+	if o.HeartbeatExtension > maxVisibilityTimeout {
+		return fmt.Errorf("sqs worker: options.HeartbeatExtension must be <= %s (got %s)", maxVisibilityTimeout, o.HeartbeatExtension)
+	}
+	if o.HeartbeatExtension%time.Second != 0 {
+		return fmt.Errorf("sqs worker: options.HeartbeatExtension must be whole seconds (got %s)", o.HeartbeatExtension)
+	}
+	// A marked message stops being extended. Its last extension may be a whole interval old, so what is
+	// left must still cover the delete.
+	if left, need := o.HeartbeatExtension-o.HeartbeatInterval, o.DeleteBatchWindow+deleteCallTimeout; left <= need {
+		return fmt.Errorf("sqs worker: options.HeartbeatExtension - HeartbeatInterval must be > DeleteBatchWindow + %s (got %s, need > %s)", deleteCallTimeout, left, need)
 	}
 
 	return nil
@@ -127,16 +159,29 @@ func WithWaitTimeSeconds(n int32) Option {
 	}
 }
 
-func WithVisibilityTimeoutSeconds(n int32) Option {
+func WithDeleteBatchWindow(d time.Duration) Option {
 	return func(o *Options) error {
-		o.VisibilityTimeoutSeconds = &n
+		o.DeleteBatchWindow = d
 		return nil
 	}
 }
 
-func WithDeleteBatchWindow(d time.Duration) Option {
+// WithMaxPrefetched sets the most received messages that may wait in memory for a busy handler.
+// The default is 10. Use 0 for long jobs, so the worker receives only for idle handlers.
+func WithMaxPrefetched(n int) Option {
 	return func(o *Options) error {
-		o.DeleteBatchWindow = d
+		o.MaxPrefetched = n
+		return nil
+	}
+}
+
+// WithHeartbeat sets how long each receive and extension hides a message, and how often the worker extends
+// the messages it holds. The defaults are 3 and 6 minutes. extension must be whole seconds, and SQS stops
+// extending a message 12 hours after it was received.
+func WithHeartbeat(interval, extension time.Duration) Option {
+	return func(o *Options) error {
+		o.HeartbeatInterval = interval
+		o.HeartbeatExtension = extension
 		return nil
 	}
 }
