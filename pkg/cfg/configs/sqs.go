@@ -38,7 +38,10 @@ import "time"
 //	}
 
 type SQS struct {
-	QueueURL          string        `env:"SQS_QUEUE_URL" yaml:"queueUrl" safe:"true"`
-	VisibilityTimeout time.Duration `env:"SQS_WORKER_VISIBILITY_TIMEOUT" yaml:"workerVisibilityTimeout" env-default:"2m" safe:"true"`
-	Concurrency       int           `env:"SQS_WORKER_CONCURRENCY" yaml:"workerConcurrency" env-default:"4" safe:"true"`
+	QueueURL string `env:"SQS_QUEUE_URL" yaml:"queueUrl" safe:"true"`
+	// HeartbeatInterval and HeartbeatExtension feed sqs.WithHeartbeat: every interval, the worker keeps each
+	// message it holds hidden for extension from then. The defaults match the worker's.
+	HeartbeatInterval  time.Duration `env:"SQS_WORKER_HEARTBEAT_INTERVAL" yaml:"workerHeartbeatInterval" env-default:"3m" safe:"true"`
+	HeartbeatExtension time.Duration `env:"SQS_WORKER_HEARTBEAT_EXTENSION" yaml:"workerHeartbeatExtension" env-default:"6m" safe:"true"`
+	Concurrency        int           `env:"SQS_WORKER_CONCURRENCY" yaml:"workerConcurrency" env-default:"4" safe:"true"`
 }
