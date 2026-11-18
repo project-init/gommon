@@ -2,7 +2,8 @@ package sqs
 
 import "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
-// Message wraps an SQS message and provides a best-effort Mark() API for background deletion.
+// Message wraps an SQS message. The handler calls Mark when it is done with the message; a message not marked
+// is redelivered once its visibility timeout ends.
 type Message struct {
 	raw  types.Message
 	mark func(types.Message)
@@ -13,7 +14,8 @@ type Message struct {
 func (m Message) Raw() types.Message { return m.raw }
 
 // Mark best-effort enqueues this message for background deletion.
-// It is a no-op if marking isn't configured, or if required fields are missing.
+// It is a no-op if required fields are missing, once the message has been dropped, or after the handler has
+// returned.
 func (m Message) Mark() {
 	if m.mark == nil {
 		return
