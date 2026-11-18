@@ -113,6 +113,12 @@ func startWorker(t *testing.T, w *Worker) (context.CancelFunc, <-chan error) {
 	return cancel, done
 }
 
+// fastHeartbeat makes w's heartbeat tick every 20ms, below the 1s minimum New accepts, so tests run quickly.
+// Call it after New and before Start.
+func fastHeartbeat(w *Worker) {
+	w.heartbeatInterval = 20 * time.Millisecond
+}
+
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 
@@ -427,9 +433,10 @@ func TestWorker_HeartbeatExtendsWaitingAndRunningMessages(t *testing.T) {
 		WithBatchSize(1),
 		WithMaxPrefetched(1),
 		WithDeleteBatchWindow(10*time.Millisecond),
-		WithHeartbeat(20*time.Millisecond, 4*time.Second),
+		WithHeartbeat(time.Second, 5*time.Second),
 	)
 	require.NoError(t, err)
+	fastHeartbeat(w)
 
 	fc.enqueueReceive(receive("a"), nil)
 	fc.enqueueReceive(receive("b"), nil)
@@ -445,11 +452,11 @@ func TestWorker_HeartbeatExtendsWaitingAndRunningMessages(t *testing.T) {
 	})
 
 	fc.visMu.Lock()
-	assert.Equal(t, int32(4), fc.extensions[0])
+	assert.Equal(t, int32(5), fc.extensions[0])
 	fc.visMu.Unlock()
 
 	// Receives hide messages for the heartbeat extension.
-	assert.Equal(t, int32(4), fc.getReceiveCalls()[0].VisibilityTimeout)
+	assert.Equal(t, int32(5), fc.getReceiveCalls()[0].VisibilityTimeout)
 
 	g.open("a")
 	g.open("b")
@@ -477,9 +484,10 @@ func TestWorker_HeartbeatFailureDropsWaitingMessage(t *testing.T) {
 		WithBatchSize(1),
 		WithMaxPrefetched(1),
 		WithDeleteBatchWindow(10*time.Millisecond),
-		WithHeartbeat(20*time.Millisecond, 4*time.Second),
+		WithHeartbeat(time.Second, 5*time.Second),
 	)
 	require.NoError(t, err)
+	fastHeartbeat(w)
 
 	fc.enqueueReceive(receive("a"), nil)
 	fc.enqueueReceive(receive("b"), nil)
@@ -515,9 +523,10 @@ func TestWorker_HeartbeatFailureCancelsRunningHandler(t *testing.T) {
 		WithBatchSize(1),
 		WithMaxPrefetched(0),
 		WithDeleteBatchWindow(10*time.Millisecond),
-		WithHeartbeat(20*time.Millisecond, 4*time.Second),
+		WithHeartbeat(time.Second, 5*time.Second),
 	)
 	require.NoError(t, err)
+	fastHeartbeat(w)
 
 	fc.enqueueReceive(receive("a"), nil)
 	cancel, done := startWorker(t, w)
@@ -557,10 +566,11 @@ func TestWorker_HeartbeatDropsMessageWhoseVisibilityEnded(t *testing.T) {
 		WithBatchSize(1),
 		WithMaxPrefetched(0),
 		WithDeleteBatchWindow(10*time.Millisecond),
-		WithHeartbeat(20*time.Millisecond, 4*time.Second),
+		WithHeartbeat(time.Second, 5*time.Second),
 	)
 	require.NoError(t, err)
-	// Shorter than validation allows, so the test does not wait four seconds for the message to be lost.
+	fastHeartbeat(w)
+	// Shorter than validation allows, so the test does not wait five seconds for the message to be lost.
 	w.heartbeatExtension = time.Second
 
 	fc.enqueueReceive(receive("a"), nil)
@@ -602,9 +612,10 @@ func TestWorker_MarkDeletesTheMessageAndStopsItsHeartbeat(t *testing.T) {
 		WithMaxPrefetched(0),
 		WithDeleteBatchSize(1),
 		WithDeleteBatchWindow(10*time.Millisecond),
-		WithHeartbeat(20*time.Millisecond, 4*time.Second),
+		WithHeartbeat(time.Second, 5*time.Second),
 	)
 	require.NoError(t, err)
+	fastHeartbeat(w)
 
 	fc.enqueueReceive(receive("a"), nil)
 	cancel, done := startWorker(t, w)
@@ -644,9 +655,10 @@ func TestWorker_UnsettledMessageFreesItsSlotWhenTheHandlerReturns(t *testing.T) 
 		WithBatchSize(1),
 		WithMaxPrefetched(0),
 		WithDeleteBatchWindow(10*time.Millisecond),
-		WithHeartbeat(20*time.Millisecond, 4*time.Second),
+		WithHeartbeat(time.Second, 5*time.Second),
 	)
 	require.NoError(t, err)
+	fastHeartbeat(w)
 
 	fc.enqueueReceive(receive("a"), nil)
 	cancel, done := startWorker(t, w)
@@ -690,9 +702,10 @@ func TestWorker_ShutdownLetsGoOfWaitingMessagesAndKeepsRunningOnesHidden(t *test
 		WithBatchSize(1),
 		WithMaxPrefetched(1),
 		WithDeleteBatchWindow(10*time.Millisecond),
-		WithHeartbeat(20*time.Millisecond, 4*time.Second),
+		WithHeartbeat(time.Second, 5*time.Second),
 	)
 	require.NoError(t, err)
+	fastHeartbeat(w)
 
 	fc.enqueueReceive(receive("a"), nil)
 	fc.enqueueReceive(receive("b"), nil)

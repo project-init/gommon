@@ -236,12 +236,17 @@ func TestOptionsValidate_PrefetchAndHeartbeatErrors(t *testing.T) {
 		{
 			name:    "zero HeartbeatInterval",
 			mutate:  func(o *Options) { o.HeartbeatInterval = 0 },
-			wantErr: "options.HeartbeatInterval must be > 0 and < HeartbeatExtension",
+			wantErr: "options.HeartbeatInterval must be >= 1s and < HeartbeatExtension",
+		},
+		{
+			name:    "HeartbeatInterval under a second",
+			mutate:  func(o *Options) { o.HeartbeatInterval = 3 * time.Millisecond },
+			wantErr: "options.HeartbeatInterval must be >= 1s and < HeartbeatExtension",
 		},
 		{
 			name:    "HeartbeatInterval not below HeartbeatExtension",
 			mutate:  func(o *Options) { o.HeartbeatInterval = time.Minute },
-			wantErr: "options.HeartbeatInterval must be > 0 and < HeartbeatExtension",
+			wantErr: "options.HeartbeatInterval must be >= 1s and < HeartbeatExtension",
 		},
 		{
 			name:    "HeartbeatExtension over the SQS maximum",

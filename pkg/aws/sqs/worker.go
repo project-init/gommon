@@ -34,9 +34,11 @@ type sqsClient interface {
 
 var (
 	// ErrVisibilityLost is the cause of a handler's context cancellation when the worker could not keep one of
-	// the batch's messages hidden. Another worker may already have received the message, so the handler
-	// should stop without writing anything. Mark is a no-op for a lost message. This also happens to a job
-	// still running 12 hours after its message was received, the most SQS keeps a message hidden.
+	// the batch's messages hidden. Another worker may already have received that message, so the handler
+	// should stop work on it without writing anything; Mark is a no-op for it. The context of the whole batch
+	// is cancelled, but the batch's other messages are still held, and the handler may still mark the ones it
+	// finished. This also happens to a job still running 12 hours after its message was received, the most
+	// SQS keeps a message hidden.
 	ErrVisibilityLost = errors.New("sqs worker: message visibility lost")
 )
 

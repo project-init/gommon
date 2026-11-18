@@ -54,8 +54,13 @@ type Options struct {
 	HeartbeatExtension time.Duration
 }
 
-// maxVisibilityTimeout is the largest visibility timeout SQS accepts.
-const maxVisibilityTimeout = 12 * time.Hour
+const (
+	// maxVisibilityTimeout is the largest visibility timeout SQS accepts.
+	maxVisibilityTimeout = 12 * time.Hour
+
+	// minHeartbeatInterval is the shortest heartbeat interval New accepts.
+	minHeartbeatInterval = time.Second
+)
 
 // DefaultOptions returns a fully-populated Options struct with sane defaults.
 // QueueURL is still required and must be set via WithQueueURL (or directly) before validation.
@@ -96,8 +101,9 @@ func (o Options) Validate() error {
 	if o.MaxPrefetched < 0 {
 		return fmt.Errorf("sqs worker: options.MaxPrefetched must be >= 0 (got %d)", o.MaxPrefetched)
 	}
-	if o.HeartbeatInterval <= 0 || o.HeartbeatInterval >= o.HeartbeatExtension {
-		return fmt.Errorf("sqs worker: options.HeartbeatInterval must be > 0 and < HeartbeatExtension (got %s and %s)", o.HeartbeatInterval, o.HeartbeatExtension)
+	// Each heartbeat call gets at most one interval to finish, so a tiny interval would make every call time out.
+	if o.HeartbeatInterval < minHeartbeatInterval || o.HeartbeatInterval >= o.HeartbeatExtension {
+		return fmt.Errorf("sqs worker: options.HeartbeatInterval must be >= %s and < HeartbeatExtension (got %s and %s)", minHeartbeatInterval, o.HeartbeatInterval, o.HeartbeatExtension)
 	}
 	if o.HeartbeatExtension > maxVisibilityTimeout {
 		return fmt.Errorf("sqs worker: options.HeartbeatExtension must be <= %s (got %s)", maxVisibilityTimeout, o.HeartbeatExtension)
