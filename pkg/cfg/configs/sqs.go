@@ -1,5 +1,7 @@
 package configs
 
+import "time"
+
 // SQS Struct meant to wrap configuration values to work alongside the https://github.com/project-init/terraform-aws-sqs
 // terraform module. Usage would look similar to
 //
@@ -36,5 +38,7 @@ package configs
 //	}
 
 type SQS struct {
-	QueueURL string `env:"SQS_QUEUE_URL" yaml:"queueUrl" safe:"true"`
+	QueueURL          string        `env:"SQS_QUEUE_URL" yaml:"queueUrl" safe:"true"`
+	VisibilityTimeout time.Duration `env:"SQS_WORKER_VISIBILITY_TIMEOUT" yaml:"workerVisibilityTimeout" env-default:"2m" safe:"true"`
+	Concurrency       int           `env:"SQS_WORKER_CONCURRENCY" yaml:"workerConcurrency" env-default:"4" safe:"true"`
 }
