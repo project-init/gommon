@@ -77,6 +77,16 @@ func (c *Client) NewRequest(ctx context.Context, method, path string, body any) 
 // when Jira sends it. Otherwise the wait starts at one second and doubles up to 16 seconds.
 // The wait uses the request context, so a canceled caller stops between attempts.
 func (c *Client) Do(request *http.Request, responseTarget any) error {
+	response, err := c.send(request)
+	if err != nil {
+		return err
+	}
+	return finish(response, responseTarget)
+}
+
+// send executes request with Do's retries and returns the final response, whatever its status. The
+// caller closes its body.
+func (c *Client) send(request *http.Request) (*http.Response, error) {
 	sleep := c.sleep
 	if sleep == nil {
 		sleep = sleepCtx
@@ -85,27 +95,27 @@ func (c *Client) Do(request *http.Request, responseTarget any) error {
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
 			if err := rewind(request); err != nil {
-				return err
+				return nil, err
 			}
 		}
 
 		response, err := c.client.Do(request)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if response == nil {
-			return errors.New("jira returned an empty response")
+			return nil, errors.New("jira returned an empty response")
 		}
 
 		if retryable(response.StatusCode) && attempt < maxRetries && canReplay(request) {
 			delay := retryWait(response.Header, attempt)
 			discard(response)
 			if err := sleep(request.Context(), delay); err != nil {
-				return err
+				return nil, err
 			}
 			continue
 		}
-		return finish(response, responseTarget)
+		return response, nil
 	}
 }
 
