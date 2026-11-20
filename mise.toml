@@ -1,12 +1,15 @@
 [tools]
+# Go
 go = "1.27.4"
 node = "26.13.1"
-prettier = "3.10.1"
 "github:golangci/golangci-lint" = "2.15.0"
 gotestsum = "1.13.0"
 
 # Internal
 "github:project-init/devex" = "v0.24.0"
+
+# Markdown
+oxfmt = "0.79.0"
 
 [settings]
 experimental = true
