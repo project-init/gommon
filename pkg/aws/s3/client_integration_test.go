@@ -20,8 +20,9 @@ func TestFailedPrefixRoundTrip(t *testing.T) {
 
 	key := "failed/" + uuid.NewString()
 	body := []byte(`{"reason":"parquet conversion failed"}`)
-	err := client.Put(ctx, key, bytes.NewReader(body), "application/json")
+	put, err := client.Put(ctx, key, bytes.NewReader(body), "application/json")
 	require.NoError(t, err)
+	assert.Regexp(t, `^".+"$`, put.ETag, "ETag keeps the quotes S3 sends")
 
 	var found bool
 	var size int64
@@ -44,6 +45,7 @@ func TestFailedPrefixRoundTrip(t *testing.T) {
 	assert.Equal(t, "application/json", got.ContentType)
 	assert.Equal(t, int64(len(body)), got.Size)
 	assert.False(t, got.LastModified.IsZero())
+	assert.Equal(t, put.ETag, got.ETag)
 
 	_, err = client.Get(ctx, "failed/does-not-exist-"+uuid.NewString())
 	require.ErrorIs(t, err, gerror.ErrNotFound)
@@ -64,8 +66,8 @@ func TestListWholeBucketIncludesObjectsOutsideThePrefix(t *testing.T) {
 	inside := "failed/" + uuid.NewString()
 	outside := "other/" + uuid.NewString()
 	body := []byte("record")
-	require.NoError(t, client.Put(ctx, inside, bytes.NewReader(body), ""))
-	require.NoError(t, client.Put(ctx, outside, bytes.NewReader(body), ""))
+	put(t, ctx, client, inside, body)
+	put(t, ctx, client, outside, body)
 
 	var sawInside, sawOutside bool
 	for _, object := range listAll(t, ctx, client, "") {
@@ -104,7 +106,7 @@ func TestMissingBucketIsNotNotFound(t *testing.T) {
 	require.Error(t, err)
 	require.NotErrorIs(t, err, gerror.ErrNotFound)
 
-	err = client.Put(ctx, key, bytes.NewReader([]byte("record")), "")
+	_, err = client.Put(ctx, key, bytes.NewReader([]byte("record")), "")
 	require.Error(t, err)
 	require.NotErrorIs(t, err, gerror.ErrNotFound)
 	require.ErrorContains(t, err, "put object "+key)
@@ -115,10 +117,12 @@ func TestHeadReturnsMetadataWithoutBody(t *testing.T) {
 
 	key := "head/" + uuid.NewString()
 	body := []byte(`{"id":"SAL-1"}`)
-	require.NoError(t, client.Put(ctx, key, bytes.NewReader(body), "application/json"))
+	written, err := client.Put(ctx, key, bytes.NewReader(body), "application/json")
+	require.NoError(t, err)
 
 	head, err := client.Head(ctx, key)
 	require.NoError(t, err)
+	assert.Equal(t, written.ETag, head.ETag)
 	assert.Equal(t, "application/json", head.ContentType)
 	assert.Equal(t, int64(len(body)), head.Size)
 	assert.False(t, head.LastModified.IsZero())
@@ -132,7 +136,7 @@ func TestPutMetadataRoundTrip(t *testing.T) {
 
 	key := "metadata/" + uuid.NewString()
 	updated := "2026-11-17T14:30:00Z"
-	err := client.Put(ctx, key, bytes.NewReader([]byte(`{}`)), "application/json",
+	_, err := client.Put(ctx, key, bytes.NewReader([]byte(`{}`)), "application/json",
 		WithMetadata(map[string]string{"Jira-Updated": updated}))
 	require.NoError(t, err)
 
@@ -146,10 +150,88 @@ func TestPutMetadataRoundTrip(t *testing.T) {
 	assert.Equal(t, map[string]string{"jira-updated": updated}, got.Metadata)
 
 	// A second Put without metadata replaces the object and drops the old metadata.
-	require.NoError(t, client.Put(ctx, key, bytes.NewReader([]byte(`{}`)), "application/json"))
+	_, err = client.Put(ctx, key, bytes.NewReader([]byte(`{}`)), "application/json")
+	require.NoError(t, err)
 	head, err = client.Head(ctx, key)
 	require.NoError(t, err)
 	assert.Empty(t, head.Metadata)
+}
+
+func TestPutIfNoneMatchOnlyCreates(t *testing.T) {
+	client, ctx := localClient(t)
+
+	key := "conditional/" + uuid.NewString()
+	first, err := client.Put(ctx, key, bytes.NewReader([]byte("first")), "", WithIfNoneMatch())
+	require.NoError(t, err)
+
+	_, err = client.Put(ctx, key, bytes.NewReader([]byte("second")), "", WithIfNoneMatch())
+	require.ErrorIs(t, err, gerror.ErrPreconditionFailed)
+	require.ErrorContains(t, err, "put object "+key)
+
+	head, err := client.Head(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, first.ETag, head.ETag)
+}
+
+func TestPutIfMatchRejectsStaleETag(t *testing.T) {
+	client, ctx := localClient(t)
+
+	key := "conditional/" + uuid.NewString()
+	stale := put(t, ctx, client, key, []byte("v1")).ETag
+	current := put(t, ctx, client, key, []byte("v2")).ETag
+	require.NotEqual(t, stale, current)
+
+	_, err := client.Put(ctx, key, bytes.NewReader([]byte("v3")), "", WithIfMatch(stale))
+	require.ErrorIs(t, err, gerror.ErrPreconditionFailed)
+
+	head, err := client.Head(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, current, head.ETag)
+}
+
+func TestPutIfMatchOnMissingKeyFails(t *testing.T) {
+	client, ctx := localClient(t)
+
+	key := "conditional/" + uuid.NewString()
+	_, err := client.Put(ctx, key, bytes.NewReader([]byte("v1")), "", WithIfMatch(`"9b2cf535f27731c974343645a3985328"`))
+	// S3 answers 404 NoSuchKey here, not 412.
+	require.ErrorIs(t, err, gerror.ErrNotFound)
+	require.NotErrorIs(t, err, gerror.ErrPreconditionFailed)
+
+	_, err = client.Head(ctx, key)
+	require.ErrorIs(t, err, gerror.ErrNotFound)
+}
+
+func TestETagsFromPutGetAndHeadWorkWithIfMatch(t *testing.T) {
+	client, ctx := localClient(t)
+
+	key := "conditional/" + uuid.NewString()
+	fromPut := put(t, ctx, client, key, []byte("v1")).ETag
+
+	fromPut2, err := client.Put(ctx, key, bytes.NewReader([]byte("v2")), "", WithIfMatch(fromPut))
+	require.NoError(t, err)
+
+	got, err := client.Get(ctx, key)
+	require.NoError(t, err)
+	require.NoError(t, got.Body.Close())
+	assert.Equal(t, fromPut2.ETag, got.ETag)
+
+	fromGet, err := client.Put(ctx, key, bytes.NewReader([]byte("v3")), "", WithIfMatch(got.ETag))
+	require.NoError(t, err)
+
+	head, err := client.Head(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, fromGet.ETag, head.ETag)
+
+	_, err = client.Put(ctx, key, bytes.NewReader([]byte("v4")), "", WithIfMatch(head.ETag))
+	require.NoError(t, err)
+
+	got, err = client.Get(ctx, key)
+	require.NoError(t, err)
+	payload, err := io.ReadAll(got.Body)
+	require.NoError(t, err)
+	require.NoError(t, got.Body.Close())
+	assert.Equal(t, []byte("v4"), payload)
 }
 
 func TestCheckBucketTellsMissingBucketFromMissingKey(t *testing.T) {
@@ -170,6 +252,14 @@ func localClient(t *testing.T) (*Client, context.Context) {
 	client, err := New("gommon-s3-dev", 5*time.Second, 3)
 	require.NoError(t, err)
 	return client, ctx
+}
+
+func put(t *testing.T, ctx context.Context, client *Client, key string, body []byte) *PutResult {
+	t.Helper()
+
+	result, err := client.Put(ctx, key, bytes.NewReader(body), "")
+	require.NoError(t, err)
+	return result
 }
 
 func listAll(t *testing.T, ctx context.Context, client *Client, prefix string) []ObjectInfo {
