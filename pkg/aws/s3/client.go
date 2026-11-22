@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	sdks3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	gaws "github.com/project-init/gommon/pkg/aws"
@@ -40,12 +41,21 @@ type ListResult struct {
 // GetResult is the body and metadata for one key. The caller closes Body.
 // The Get deadline stays in effect until Body is closed.
 // Metadata holds the user metadata set on the object, keyed without the x-amz-meta- prefix.
+// ETag is the object's entity tag in the form S3 sends it, surrounding double quotes included,
+// for example "9b2cf535f27731c974343645a3985328". Pass it unchanged to WithIfMatch.
 type GetResult struct {
 	Body         io.ReadCloser
 	ContentType  string
 	Size         int64
 	LastModified time.Time
 	Metadata     map[string]string
+	ETag         string
+}
+
+// PutResult describes the object a Put wrote. ETag has the same quoted form as GetResult.ETag and
+// can be passed unchanged to WithIfMatch on the next Put.
+type PutResult struct {
+	ETag string
 }
 
 // PutOption sets an optional field on a Put.
@@ -66,13 +76,36 @@ func WithMetadata(metadata map[string]string) PutOption {
 	}
 }
 
+// WithIfMatch makes the Put write only if the object at the key currently has this ETag, so a writer
+// holding an old copy cannot overwrite a newer one. Pass an ETag exactly as returned by Get, Head or
+// Put. A mismatch makes Put return an error wrapping ErrPreconditionFailed. If no object exists at
+// the key, S3 answers 404 instead and Put returns an error wrapping ErrNotFound. S3 answers 404 for
+// a missing bucket as well, so with WithIfMatch a missing bucket also wraps ErrNotFound. Call
+// CheckBucket first when the two must be told apart.
+// An empty etag makes Put fail with ErrBadRequest instead of writing unconditionally.
+func WithIfMatch(etag string) PutOption {
+	return func(input *sdks3.PutObjectInput) {
+		input.IfMatch = aws.String(etag)
+	}
+}
+
+// WithIfNoneMatch makes the Put write only if no object exists at the key (If-None-Match: *).
+// If one does, Put returns an error wrapping ErrPreconditionFailed.
+func WithIfNoneMatch() PutOption {
+	return func(input *sdks3.PutObjectInput) {
+		input.IfNoneMatch = aws.String("*")
+	}
+}
+
 // HeadResult is the metadata for one key, read without its body.
 // Metadata holds the user metadata set on the object, keyed without the x-amz-meta- prefix.
+// ETag has the same quoted form as GetResult.ETag.
 type HeadResult struct {
 	ContentType  string
 	Size         int64
 	LastModified time.Time
 	Metadata     map[string]string
+	ETag         string
 }
 
 // cancelOnClose cancels the Get deadline after the caller finishes the body.
@@ -196,6 +229,7 @@ func (c *Client) Get(ctx context.Context, key string) (*GetResult, error) {
 		Size:         aws.ToInt64(output.ContentLength),
 		LastModified: aws.ToTime(output.LastModified),
 		Metadata:     output.Metadata,
+		ETag:         aws.ToString(output.ETag),
 	}, nil
 }
 
@@ -230,6 +264,7 @@ func (c *Client) Head(ctx context.Context, key string) (*HeadResult, error) {
 		Size:         aws.ToInt64(output.ContentLength),
 		LastModified: aws.ToTime(output.LastModified),
 		Metadata:     output.Metadata,
+		ETag:         aws.ToString(output.ETag),
 	}, nil
 }
 
@@ -259,6 +294,32 @@ func isNotFound(err error) bool {
 	return errors.As(err, &status) && status.HTTPStatusCode() == http.StatusNotFound
 }
 
+// putErrorSentinel returns the gerror sentinel for the S3 statuses Put maps, or nil for
+// any other error. input is the request that failed. It reads the HTTP status from the SDK's response
+// error, because the SDK has no typed errors for these refusals on PutObject.
+//   - 412: the If-Match or If-None-Match condition does not hold.
+//   - 409: S3 reports a conflict, usually another conditional write to the same key in progress.
+//   - 404 with If-Match: no object exists at the key, or the bucket is missing; the status cannot tell
+//     them apart. Without If-Match, Put creates a missing key, so a 404 can only mean a missing
+//     bucket and is left unmapped.
+func putErrorSentinel(err error, input *sdks3.PutObjectInput) error {
+	var responseErr *awshttp.ResponseError
+	if !errors.As(err, &responseErr) {
+		return nil
+	}
+	switch responseErr.HTTPStatusCode() {
+	case http.StatusPreconditionFailed:
+		return gerror.ErrPreconditionFailed
+	case http.StatusConflict:
+		return gerror.ErrConflict
+	case http.StatusNotFound:
+		if input.IfMatch != nil {
+			return gerror.ErrNotFound
+		}
+	}
+	return nil
+}
+
 func releaseGet(cancel context.CancelFunc, output *sdks3.GetObjectOutput) {
 	if output != nil && output.Body != nil {
 		_ = output.Body.Close()
@@ -266,14 +327,35 @@ func releaseGet(cancel context.CancelFunc, output *sdks3.GetObjectOutput) {
 	cancel()
 }
 
-// Put writes body to key, replacing any existing object. A seekable body lets the SDK set the content length.
+// Put writes body to key, replacing any existing object, and returns the new object's ETag.
+// A seekable body lets the SDK set the content length.
 // Pass WithMetadata to store user metadata alongside the object.
-func (c *Client) Put(ctx context.Context, key string, body io.Reader, contentType string, opts ...PutOption) error {
+//
+// Pass WithIfMatch or WithIfNoneMatch, not both, to make the write conditional. Passing both fails
+// with ErrBadRequest, as S3 does not support the pair. When S3 refuses a conditional write, Put
+// returns an error wrapping one of:
+//   - ErrPreconditionFailed (412): the condition does not hold. Another writer changed or created
+//     the object, so retrying the same write fails again.
+//   - ErrNotFound (404): WithIfMatch was used and no object, or no bucket, exists at the key.
+//
+// Any 409, S3's conflict status, wraps ErrConflict, whether or not the Put is conditional. On a
+// conditional Put it usually means another conditional write to the same key was in progress. For
+// WithIfMatch, AWS advises reading the current ETag and trying again; for WithIfNoneMatch, trying
+// again.
+//
+// The client does not retry any of these.
+//
+// A conditional Put can report ErrPreconditionFailed even though its own write landed. The client
+// retries an attempt that failed with a connection error or a transient server error. If S3 stored
+// the object on the first attempt but the response was lost, the retry finds the object already
+// changed and gets 412. Put cannot tell this apart from a write by someone else. Callers that need
+// to know can write a unique token with WithMetadata and read it back with Head.
+func (c *Client) Put(ctx context.Context, key string, body io.Reader, contentType string, opts ...PutOption) (*PutResult, error) {
 	if key == "" {
-		return fmt.Errorf("%w: key is required", gerror.ErrBadRequest)
+		return nil, fmt.Errorf("%w: key is required", gerror.ErrBadRequest)
 	}
 	if body == nil {
-		return fmt.Errorf("%w: body is required", gerror.ErrBadRequest)
+		return nil, fmt.Errorf("%w: body is required", gerror.ErrBadRequest)
 	}
 
 	input := &sdks3.PutObjectInput{
@@ -289,14 +371,27 @@ func (c *Client) Put(ctx context.Context, key string, body io.Reader, contentTyp
 			opt(input)
 		}
 	}
+	if input.IfMatch != nil && *input.IfMatch == "" {
+		return nil, fmt.Errorf("%w: if-match etag is required", gerror.ErrBadRequest)
+	}
+	if input.IfMatch != nil && input.IfNoneMatch != nil {
+		return nil, fmt.Errorf("%w: if-match and if-none-match cannot be combined", gerror.ErrBadRequest)
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	if _, err := c.api.PutObject(ctx, input); err != nil {
-		return fmt.Errorf("%w: put object %s", err, key)
+	output, err := c.api.PutObject(ctx, input)
+	if err != nil {
+		if sentinel := putErrorSentinel(err, input); sentinel != nil {
+			return nil, fmt.Errorf("%w: put object %s: %w", sentinel, key, err)
+		}
+		return nil, fmt.Errorf("%w: put object %s", err, key)
 	}
-	return nil
+	if output == nil {
+		return nil, fmt.Errorf("put object %s: empty response", key)
+	}
+	return &PutResult{ETag: aws.ToString(output.ETag)}, nil
 }
 
 // List returns one page of objects under prefix. An empty prefix lists the bucket.
