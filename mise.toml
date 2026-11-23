@@ -6,7 +6,7 @@ node = "26.13.1"
 gotestsum = "1.13.0"
 
 # Internal
-"github:project-init/devex" = "v0.24.0"
+"github:project-init/devex" = "v0.25.1"
 
 # Markdown
 oxfmt = "0.79.0"
