@@ -6,7 +6,7 @@ dependencies:
     target: patch
     # go.mod holds the minor line's floor; mise pins the patch. The current 1.26.6 floor
     # stays until the minor itself changes.
-    directive: minor
+    directive: none
   mise:
     policies:
       # golangci-lint majors change its config format, so they move by hand.
